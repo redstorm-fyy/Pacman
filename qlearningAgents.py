@@ -195,7 +195,7 @@ class ApproximateQAgent(PacmanQAgent):
         #util.raiseNotDefined()
         maxQValue=self.computeValueFromQValues(nextState)
         diff=reward+self.discount*maxQValue-self.getQValue(state,action)
-        featureWeights=util.Counter()
+        featureWeights=dict()
         features=self.featExtractor.getFeatures(state,action)
         for (k,v) in features.items():
             featureWeights[k]=self.weights[k]+self.alpha*diff*v
