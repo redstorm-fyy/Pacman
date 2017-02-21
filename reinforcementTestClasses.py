@@ -24,6 +24,7 @@ pp = PrettyPrinter()
 VERBOSE = False
 
 import gridworld
+from functools import reduce
 
 LIVINGREWARD = -0.1
 NOISE = 0.2
@@ -131,7 +132,7 @@ class ValueIterationTest(testClasses.TestCase):
             policy[state] = agent.computeActionFromValues(state)
             possibleActions = self.grid.getPossibleActions(state)
             for action in actions:
-                if not qValues.has_key(action):
+                if not action in qValues:
                     qValues[action] = {}
                 if action in possibleActions:
                     qValues[action][state] = agent.computeQValueFromValues(state, action)
