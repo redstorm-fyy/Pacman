@@ -101,8 +101,8 @@ def translateState(state):
     channels=6
     tensor=np.zeros([width,height,channels],dtype=int)
     food=state.getFood()
-    for i in range(height):
-        for j in range(width):
+    for i in range(width):
+        for j in range(height):
             vector=tensor[i][j]
             vector[0]=walls[i][j] #wall
             vector[1]=food[i][j]  #food
