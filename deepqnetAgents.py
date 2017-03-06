@@ -123,7 +123,7 @@ class DQNAgent(ReinforcementAgent):
     def __init__(self,**args):
         super().__init__(**args)
         self.replay=collections.deque()
-        self.epsilon=0.1
+        self.epsilon=0.05
         self.frameNum=100000
         self.batchSize=32
         self.startCount=1024
