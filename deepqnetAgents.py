@@ -18,10 +18,10 @@ class DeepQNet:
         self.terminal=tf.placeholder(tf.float32,[None])
         self.actions=tf.placeholder(tf.float32,[None,self.ydim])
 
-        size=5;filters=32
+        size=3;filters=32
         weight=tf.Variable(tf.random_normal([size,size,channels,filters],stddev=0.1))
         bias=tf.Variable(tf.constant(0.1,shape=[filters]))
-        conv=tf.nn.conv2d(self.x,weight,strides=[1,1,1,1],padding="SAME")+bias
+        conv=tf.nn.conv2d(self.x,weight,strides=[1,1,1,1],padding="VALID")+bias
         conv=tf.nn.relu(conv)
         layer=conv
         #layer=tf.nn.max_pool(conv,ksize=[1,2,2,1],strides=[1,2,2,1],padding="VALID")
@@ -43,7 +43,7 @@ class DeepQNet:
         predictQ=tf.reduce_sum(self.y*self.actions,reduction_indices=1)
         loss=tf.reduce_sum(tf.pow(newQ-predictQ,2))
 
-        optimizer=tf.train.RMSPropOptimizer(0.01,decay=0.9)
+        optimizer=tf.train.RMSPropOptimizer(0.001,decay=0.99)
         self.rmsprop=optimizer.minimize(loss)
 
         self.sess=tf.Session()
@@ -123,7 +123,7 @@ class DQNAgent(ReinforcementAgent):
     def __init__(self,**args):
         super().__init__(**args)
         self.replay=collections.deque()
-        self.epsilon=0.05
+        self.epsilon=0.1
         self.frameNum=100000
         self.batchSize=32
         self.startCount=1024
@@ -138,17 +138,28 @@ class DQNAgent(ReinforcementAgent):
         self.dqn = makesureDQN(width, height, channels)
         self.terminal=False
 
-    def getPolicy(self,state):
+    def getPolicy(self,state,legalActions):
         state=translateState(state)
         state=state[np.newaxis]
         qvalue=self.dqn.values(state)
-        maxQValue=np.amax(qvalue)
-        maxPossibles=np.argwhere(qvalue==maxQValue)
-        action=None
-        if len(maxPossibles)>1:
-            action=getDirection(maxPossibles[random.randint(0,len(maxPossibles))][0])
-        else:
-            action=getDirection(maxPossibles[0][0])
+
+        actArray=[]
+        for i,v in enumerate(qvalue):
+            actArray.append((i,v))
+        actArray.sort(key=lambda e:e[1])
+        actLen=len(actArray)
+        for (idx,act) in enumerate(reversed(actArray)):
+            i=act[0]
+            v=act[1]
+            if getDirection(i) not in legalActions:
+                del(actArray[actLen-idx-1])
+            else:
+                break
+
+        idx=actArray[len(actArray)-1][0]
+        action=getDirection(idx)
+        if action not in legalActions:
+            action=game.Directions.STOP
         return action
 
     def getAction(self,state):
@@ -159,9 +170,7 @@ class DQNAgent(ReinforcementAgent):
         if util.flipCoin(self.epsilon):
             action=random.choice(legalActions)
         else:
-            action=self.getPolicy(state)
-            if action not in legalActions:
-                action=random.choice(legalActions)
+            action=self.getPolicy(state,legalActions)
         self.doAction(state,action)
         return action
 
@@ -176,8 +185,8 @@ class DQNAgent(ReinforcementAgent):
         if len(self.replay)>self.frameNum:
             self.replay.popleft()
         self.count+=1
-        if self.count%self.batchSize!=0:
-            return
+        #if self.count%self.batchSize!=0:
+        #    return
         if self.count<self.startCount:
             return
         self.train()
