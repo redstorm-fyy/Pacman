@@ -21,10 +21,19 @@ class DeepQNet:
         size=3;filters=32
         weight=tf.Variable(tf.random_normal([size,size,channels,filters],stddev=0.1))
         bias=tf.Variable(tf.constant(0.1,shape=[filters]))
-        conv=tf.nn.conv2d(self.x,weight,strides=[1,1,1,1],padding="VALID")+bias
-        conv=tf.nn.relu(conv)
-        layer=conv
-        #layer=tf.nn.max_pool(conv,ksize=[1,2,2,1],strides=[1,2,2,1],padding="VALID")
+        conv=tf.nn.conv2d(self.x,weight,strides=[1,1,1,1],padding="SAME")+bias
+        layer=tf.nn.relu(conv)
+        layer=tf.nn.max_pool(layer,ksize=[1,2,2,1],strides=[1,2,2,1],padding="SAME")
+        tf.summary.histogram("weight1",weight)
+        tf.summary.histogram("bias1",bias)
+
+        size=3;channels=filters;filters=64
+        weight=tf.Variable(tf.random_normal([size,size,channels,filters],stddev=0.1))
+        bias=tf.Variable(tf.constant(0.1,shape=[filters]))
+        conv=tf.nn.conv2d(layer,weight,strides=[1,1,1,1],padding="SAME")+bias
+        layer=tf.nn.relu(conv)
+        tf.summary.histogram("weight2",weight)
+        tf.summary.histogram("bias2",bias)
 
         layerShape=layer.get_shape().as_list()
         indim=layerShape[1]*layerShape[2]*layerShape[3];outdim=256
@@ -32,22 +41,31 @@ class DeepQNet:
         weight=tf.Variable(tf.random_normal([indim,outdim]))
         bias=tf.Variable(tf.constant(0.1,shape=[outdim]))
         layer=tf.nn.relu(tf.matmul(flat,weight)+bias)
+        tf.summary.histogram("weight3",weight)
+        tf.summary.histogram("bias3",bias)
 
         indim=outdim;outdim=self.ydim;
         weight=tf.Variable(tf.random_normal([indim,outdim],stddev=0.1))
         bias=tf.Variable(tf.constant(0.1,shape=[outdim]))
         self.y=tf.matmul(layer,weight)+bias
+        tf.summary.histogram("weight4",weight)
+        tf.summary.histogram("bias4",bias)
 
         discount=tf.constant(0.9)
         newQ=self.reward+(1.0-self.terminal)*discount*self.qvalue
         predictQ=tf.reduce_sum(self.y*self.actions,reduction_indices=1)
-        loss=tf.reduce_sum(tf.pow(newQ-predictQ,2))
+        loss=tf.reduce_sum(tf.square(newQ-predictQ))
+        tf.summary.scalar("loss",loss)
 
         optimizer=tf.train.RMSPropOptimizer(0.001,decay=0.99)
         self.rmsprop=optimizer.minimize(loss)
 
         self.sess=tf.Session()
         self.sess.run(tf.global_variables_initializer())
+
+        self.writer=tf.summary.FileWriter("../logs/",self.sess.graph)
+        self.summary=tf.summary.merge_all()
+        self.step=0
 
     def train(self,batchSize,state,actions,nextState,reward,terminal):
         qvalue=np.zeros(batchSize)
@@ -56,6 +74,10 @@ class DeepQNet:
         qvalue=np.amax(qvalue,axis=1)
         feed_dict={self.x:state,self.qvalue:qvalue,self.actions:actions,self.terminal:terminal,self.reward:reward}
         self.sess.run(self.rmsprop,feed_dict=feed_dict)
+        if self.step%10==0:
+            summary=self.sess.run(self.summary,feed_dict=feed_dict)
+            self.writer.add_summary(summary,self.step)
+        self.step+=1
 
     def values(self,state):
         feed_dict={self.x:state,self.qvalue:np.zeros(1),self.actions:np.zeros([1,self.ydim]),self.terminal:np.zeros(1),self.reward:np.zeros(1)}
