@@ -10,7 +10,7 @@ class DeepQNet:
     def __del__(self):
         self.sess.close()
 
-    def __init__(self,width,height,channels):
+    def __init__(self,width,height,channels,logdir=None,savedir=None):
         self.ydim=4
         self.x=tf.placeholder(tf.float32,[None,width,height,channels])
         self.qvalue=tf.placeholder(tf.float32,[None])
@@ -32,6 +32,7 @@ class DeepQNet:
         bias=tf.Variable(tf.constant(0.1,shape=[filters]))
         conv=tf.nn.conv2d(layer,weight,strides=[1,1,1,1],padding="SAME")+bias
         layer=tf.nn.relu(conv)
+        layer=tf.nn.max_pool(layer,ksize=[1,2,2,1],strides=[1,2,2,1],padding="SAME")
         tf.summary.histogram("weight2",weight)
         tf.summary.histogram("bias2",bias)
 
@@ -57,15 +58,23 @@ class DeepQNet:
         loss=tf.reduce_sum(tf.square(newQ-predictQ))
         tf.summary.scalar("loss",loss)
 
+        self.global_step=tf.Variable(0,trainable=False)
         optimizer=tf.train.RMSPropOptimizer(0.001,decay=0.99)
-        self.rmsprop=optimizer.minimize(loss)
+        self.rmsprop=optimizer.minimize(loss,global_step=self.global_step)
 
         self.sess=tf.Session()
         self.sess.run(tf.global_variables_initializer())
 
-        self.writer=tf.summary.FileWriter("../logs/",self.sess.graph)
-        self.summary=tf.summary.merge_all()
-        self.step=0
+        self.logdir=logdir
+        if self.logdir is not None:
+            self.writer=tf.summary.FileWriter(self.logdir,self.sess.graph)
+            self.summary=tf.summary.merge_all()
+        self.savedir=savedir
+        if self.savedir is not None:
+            self.saver=tf.train.Saver()
+            savefile=tf.train.latest_checkpoint(self.savedir)
+            if savefile is not None:
+                self.saver.restore(self.sess,savefile)
 
     def train(self,batchSize,state,actions,nextState,reward,terminal):
         qvalue=np.zeros(batchSize)
@@ -74,23 +83,19 @@ class DeepQNet:
         qvalue=np.amax(qvalue,axis=1)
         feed_dict={self.x:state,self.qvalue:qvalue,self.actions:actions,self.terminal:terminal,self.reward:reward}
         self.sess.run(self.rmsprop,feed_dict=feed_dict)
-        if self.step%10==0:
-            summary=self.sess.run(self.summary,feed_dict=feed_dict)
-            self.writer.add_summary(summary,self.step)
-        self.step+=1
+        step = tf.train.global_step(self.sess, self.global_step)
+        if self.logdir is not None:
+            if step%10==0:
+                summary=self.sess.run(self.summary,feed_dict=feed_dict)
+                self.writer.add_summary(summary,step)
+        if self.savedir is not None:
+            if step%1000==0:
+                self.saver.save(self.sess, self.savedir, global_step=step)
 
     def values(self,state):
         feed_dict={self.x:state,self.qvalue:np.zeros(1),self.actions:np.zeros([1,self.ydim]),self.terminal:np.zeros(1),self.reward:np.zeros(1)}
         qvalue=self.sess.run(self.y,feed_dict=feed_dict)
         return qvalue[0]
-
-GDQN=None
-
-def makesureDQN(width,height,channels):
-    global GDQN
-    if GDQN is None:
-        GDQN=DeepQNet(width,height,channels)
-    return GDQN
 
 def getDirection(index):
     if index==0.:
@@ -147,9 +152,10 @@ class DQNAgent(ReinforcementAgent):
         self.replay=collections.deque()
         self.epsilon=0.05
         self.frameNum=100000
-        self.batchSize=32
+        self.batchSize=64
         self.startCount=1024
         self.count=0
+        self.dqn=None
 
     def registerInitialState(self,state):
         super().registerInitialState(state)
@@ -157,7 +163,8 @@ class DQNAgent(ReinforcementAgent):
         width = walls.width
         height = walls.height
         channels = 6  # pacman,ghost,wall,food,capsule,scaredghost
-        self.dqn = makesureDQN(width, height, channels)
+        if self.dqn is None:
+            self.dqn = DeepQNet(width, height, channels,logdir="../logs/",savedir="../save/")
         self.terminal=False
 
     def getPolicy(self,state,legalActions):
