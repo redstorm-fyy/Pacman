@@ -10,29 +10,29 @@ class DeepQNet:
     def __del__(self):
         self.sess.close()
 
-    def __init__(self,width,height,channels,logdir=None,savedir=None):
-        self.ydim=4
+    def __init__(self,width,height,channels,ydim,logdir=None,savedir=None):
+        self.ydim=ydim
         self.x=tf.placeholder(tf.float32,[None,width,height,channels])
         self.qvalue=tf.placeholder(tf.float32,[None])
         self.reward=tf.placeholder(tf.float32,[None])
-        self.terminal=tf.placeholder(tf.float32,[None])
         self.actions=tf.placeholder(tf.float32,[None,self.ydim])
+        self.keep_prob=tf.placeholder(tf.float32)
 
-        size=3;filters=32
-        weight=tf.Variable(tf.random_normal([size,size,channels,filters],stddev=0.1))
+        size=4;filters=64
+        weight=tf.Variable(tf.random_normal([size,size,channels,filters],stddev=0.01))
         bias=tf.Variable(tf.constant(0.1,shape=[filters]))
-        conv=tf.nn.conv2d(self.x,weight,strides=[1,1,1,1],padding="SAME")+bias
+        conv=tf.nn.conv2d(self.x,weight,strides=[1,1,1,1],padding="VALID")+bias
         layer=tf.nn.relu(conv)
-        layer=tf.nn.max_pool(layer,ksize=[1,2,2,1],strides=[1,2,2,1],padding="SAME")
+        #layer=tf.nn.max_pool(layer,ksize=[1,2,2,1],strides=[1,2,2,1],padding="SAME")
         tf.summary.histogram("weight1",weight)
         tf.summary.histogram("bias1",bias)
 
         size=3;channels=filters;filters=64
-        weight=tf.Variable(tf.random_normal([size,size,channels,filters],stddev=0.1))
+        weight=tf.Variable(tf.random_normal([size,size,channels,filters],stddev=0.01))
         bias=tf.Variable(tf.constant(0.1,shape=[filters]))
-        conv=tf.nn.conv2d(layer,weight,strides=[1,1,1,1],padding="SAME")+bias
+        conv=tf.nn.conv2d(layer,weight,strides=[1,1,1,1],padding="VALID")+bias
         layer=tf.nn.relu(conv)
-        layer=tf.nn.max_pool(layer,ksize=[1,2,2,1],strides=[1,2,2,1],padding="SAME")
+        #layer=tf.nn.max_pool(layer,ksize=[1,2,2,1],strides=[1,2,2,1],padding="SAME")
         tf.summary.histogram("weight2",weight)
         tf.summary.histogram("bias2",bias)
 
@@ -42,21 +42,23 @@ class DeepQNet:
         weight=tf.Variable(tf.random_normal([indim,outdim]))
         bias=tf.Variable(tf.constant(0.1,shape=[outdim]))
         layer=tf.nn.relu(tf.matmul(flat,weight)+bias)
+        layer=tf.nn.dropout(layer,keep_prob=self.keep_prob)
         tf.summary.histogram("weight3",weight)
         tf.summary.histogram("bias3",bias)
 
         indim=outdim;outdim=self.ydim;
-        weight=tf.Variable(tf.random_normal([indim,outdim],stddev=0.1))
+        weight=tf.Variable(tf.random_normal([indim,outdim],stddev=0.01))
         bias=tf.Variable(tf.constant(0.1,shape=[outdim]))
         self.y=tf.matmul(layer,weight)+bias
         tf.summary.histogram("weight4",weight)
         tf.summary.histogram("bias4",bias)
 
         discount=tf.constant(0.9)
-        newQ=self.reward+(1.0-self.terminal)*discount*self.qvalue
+        newQ=self.reward+discount*self.qvalue
         predictQ=tf.reduce_sum(self.y*self.actions,reduction_indices=1)
         loss=tf.reduce_sum(tf.square(newQ-predictQ))
         tf.summary.scalar("loss",loss)
+        tf.summary.histogram("Qvalue",predictQ)
 
         self.global_step=tf.Variable(0,trainable=False)
         optimizer=tf.train.RMSPropOptimizer(0.001,decay=0.99)
@@ -76,14 +78,14 @@ class DeepQNet:
             if savefile is not None:
                 self.saver.restore(self.sess,savefile)
 
-    def train(self,batchSize,state,actions,nextState,reward,terminal):
+    def train(self,batchSize,state,actions,nextState,reward):
         qvalue=np.zeros(batchSize)
-        feed_dict={self.x:nextState,self.qvalue:qvalue,self.actions:actions,self.terminal:terminal,self.reward:reward}
+        feed_dict={self.x:nextState,self.qvalue:qvalue,self.actions:actions,self.reward:reward,self.keep_prob:1.0}
         qvalue=self.sess.run(self.y,feed_dict=feed_dict)
         qvalue=np.amax(qvalue,axis=1)
-        feed_dict={self.x:state,self.qvalue:qvalue,self.actions:actions,self.terminal:terminal,self.reward:reward}
-        self.sess.run(self.rmsprop,feed_dict=feed_dict)
-        step = tf.train.global_step(self.sess, self.global_step)
+        feed_dict={self.x:state,self.qvalue:qvalue,self.actions:actions,self.reward:reward,self.keep_prob:0.5}
+        _,step=self.sess.run([self.rmsprop,self.global_step],feed_dict=feed_dict)
+        #step=tf.train.global_step(self.sess, self.global_step)
         if self.logdir is not None:
             if step%10==0:
                 summary=self.sess.run(self.summary,feed_dict=feed_dict)
@@ -93,7 +95,7 @@ class DeepQNet:
                 self.saver.save(self.sess, self.savedir, global_step=step)
 
     def values(self,state):
-        feed_dict={self.x:state,self.qvalue:np.zeros(1),self.actions:np.zeros([1,self.ydim]),self.terminal:np.zeros(1),self.reward:np.zeros(1)}
+        feed_dict={self.x:state,self.qvalue:np.zeros(1),self.actions:np.zeros([1,self.ydim]),self.reward:np.zeros(1),self.keep_prob:1.0}
         qvalue=self.sess.run(self.y,feed_dict=feed_dict)
         return qvalue[0]
 
@@ -106,20 +108,20 @@ def getDirection(index):
         return game.Directions.SOUTH
     elif index==3.:
         return game.Directions.WEST
-    else:
+    elif index==4.:
         return game.Directions.STOP
 
 def translateAction(action):
     if action==game.Directions.NORTH:
-        return [1,0,0,0]
+        return [1,0,0,0,0]
     elif action==game.Directions.EAST:
-        return [0,1,0,0]
+        return [0,1,0,0,0]
     elif action==game.Directions.SOUTH:
-        return [0,0,1,0]
+        return [0,0,1,0,0]
     elif action==game.Directions.WEST:
-        return [0,0,0,1]
-    else:
-        return [0,0,0,0]
+        return [0,0,0,1,0]
+    elif action==game.Directions.STOP:
+        return [0,0,0,0,1]
 
 def translateState(state):
     walls=state.getWalls()
@@ -151,42 +153,39 @@ class DQNAgent(ReinforcementAgent):
         super().__init__(**args)
         self.replay=collections.deque()
         self.epsilon=0.05
-        self.frameNum=100000
-        self.batchSize=64
-        self.startCount=1024
+        self.frameNum=10000
+        self.batchSize=32
+        self.startCount=1000
         self.count=0
         self.dqn=None
 
     def registerInitialState(self,state):
         super().registerInitialState(state)
-        walls = state.getWalls()
-        width = walls.width
-        height = walls.height
-        channels = 6  # pacman,ghost,wall,food,capsule,scaredghost
+        walls=state.getWalls()
+        width=walls.width
+        height=walls.height
+        channels=6  # pacman,ghost,wall,food,capsule,scaredghost
+        ydim=5 # north,south,west,east,stop
         if self.dqn is None:
-            self.dqn = DeepQNet(width, height, channels,logdir="../logs/",savedir="../save/")
+            #self.dqn = DeepQNet(width, height, channels,ydim,logdir="../logs/",savedir="../save/")
+            self.dqn = DeepQNet(width, height, channels, ydim,logdir="../logs/")
         self.terminal=False
 
     def getPolicy(self,state,legalActions):
         state=translateState(state)
         state=state[np.newaxis]
         qvalue=self.dqn.values(state)
-
         actArray=[]
         for i,v in enumerate(qvalue):
             actArray.append((i,v))
         actArray.sort(key=lambda e:e[1])
-        actLen=len(actArray)
         for (idx,act) in enumerate(reversed(actArray)):
             i=act[0]
-            v=act[1]
-            if getDirection(i) not in legalActions:
-                del(actArray[actLen-idx-1])
-            else:
+            if getDirection(i) in legalActions:
                 break
-
-        idx=actArray[len(actArray)-1][0]
-        action=getDirection(idx)
+        idx=len(actArray)-idx-1
+        i=actArray[idx][0]
+        action=getDirection(i)
         if action not in legalActions:
             action=game.Directions.STOP
         return action
@@ -209,13 +208,11 @@ class DQNAgent(ReinforcementAgent):
         state=translateState(state)
         nextState=translateState(nextState)
         action=translateAction(action)
-        frame=(state,action,nextState,reward,self.terminal)
+        frame=(state,action,nextState,reward)
         self.replay.append(frame)
         if len(self.replay)>self.frameNum:
             self.replay.popleft()
         self.count+=1
-        #if self.count%self.batchSize!=0:
-        #    return
         if self.count<self.startCount:
             return
         self.train()
@@ -226,16 +223,13 @@ class DQNAgent(ReinforcementAgent):
         action=[]
         nextState=[]
         reward=[]
-        terminal=[]
         for frame in batch:
             state.append(frame[0])
             action.append(frame[1])
             nextState.append(frame[2])
             reward.append(frame[3])
-            terminal.append(frame[4])
-        self.dqn.train(self.batchSize,state,action,nextState,reward,terminal)
+        self.dqn.train(self.batchSize,state,action,nextState,reward)
 
     def final(self,state):
-        self.terminal=True
         super().final(state)
 
