@@ -29,22 +29,24 @@ class QFunction:
         self.var.append(bias)
         tf.summary.histogram("weight", weight)
         tf.summary.histogram("bias", bias)
-        return layer
+        return layer,weight
 
     def __init__(self,x,channels,ydim,keep_prob):
         self.var=[]
+        self.regular=None
 
-        layer = self.addConv2d(x, 4, channels, 64)
+        with tf.name_scope("conv"):
+            layer = self.addConv2d(x, 4, channels, 64)
 
-        layer = self.addConv2d(layer, 3, 64, 64)
+        with tf.name_scope("hidden"):
+            layerShape = layer.get_shape().as_list()
+            indim = layerShape[1] * layerShape[2] * layerShape[3];
+            layer = tf.reshape(layer, [-1, indim])
+            layer,self.regular = self.addLayer(layer, indim, 256, actfn=tf.nn.relu)
+            layer = tf.nn.dropout(layer, keep_prob=keep_prob)
 
-        layerShape = layer.get_shape().as_list()
-        indim = layerShape[1] * layerShape[2] * layerShape[3];
-        layer = tf.reshape(layer, [-1, indim])
-        layer = self.addLayer(layer, indim, 256, actfn=tf.nn.relu)
-        layer = tf.nn.dropout(layer, keep_prob=keep_prob)
-
-        self.y = self.addLayer(layer, 256, ydim)
+        with tf.name_scope("output"):
+            self.y,_ = self.addLayer(layer, 256, ydim)
 
 
 class DeepQNet:
@@ -61,20 +63,23 @@ class DeepQNet:
 
         self.qfunc=QFunction(self.x,channels,self.ydim,self.keep_prob)
         self.tfunc=QFunction(self.x,channels,self.ydim,1)
-        self.sychro=[]
-        for i,var in enumerate(self.qfunc.var):
-            self.sychro.append(tf.assign(self.tfunc.var[i],var))
 
-        discount=tf.constant(0.9)
-        newQ=self.reward+discount*self.qvalue
-        predictQ=tf.reduce_sum(self.qfunc.y*self.actions,reduction_indices=1)
-        loss=tf.reduce_sum(tf.square(newQ-predictQ))
-        tf.summary.scalar("loss",loss)
-        tf.summary.histogram("qvalue",predictQ)
+        with tf.name_scope("synchro"):
+            self.sychro=[]
+            for i,var in enumerate(self.qfunc.var):
+                self.sychro.append(tf.assign(self.tfunc.var[i],var))
 
-        self.global_step=tf.Variable(0,trainable=False)
-        optimizer=tf.train.RMSPropOptimizer(0.001,decay=0.99)
-        self.rmsprop=optimizer.minimize(loss,global_step=self.global_step)
+        with tf.name_scope("loss"):
+            newQ=self.reward+0.9*self.qvalue
+            predictQ=tf.reduce_sum(self.qfunc.y*self.actions,reduction_indices=1)
+            loss=tf.reduce_sum(tf.square(newQ-predictQ)+0.01*tf.nn.l2_loss(self.qfunc.regular))
+            tf.summary.scalar("loss",loss)
+            tf.summary.histogram("qvalue",predictQ)
+
+        with tf.name_scope("optimizer"):
+            self.global_step=tf.Variable(0,trainable=False)
+            optimizer=tf.train.RMSPropOptimizer(0.001,decay=0.99)
+            self.rmsprop=optimizer.minimize(loss,global_step=self.global_step)
 
         self.sess=tf.Session()
         self.sess.run(tf.global_variables_initializer())
@@ -91,7 +96,7 @@ class DeepQNet:
                 self.saver.restore(self.sess,savefile)
 
     def train(self,state,actions,reward,qvalue):
-        feed_dict={self.x:state,self.actions:actions,self.reward:reward,self.qvalue:qvalue,self.keep_prob:0.5}
+        feed_dict={self.x:state,self.actions:actions,self.reward:reward,self.qvalue:qvalue,self.keep_prob:1.0}#maybe 0.5
         _,step=self.sess.run([self.rmsprop,self.global_step],feed_dict=feed_dict)
         #step=tf.train.global_step(self.sess, self.global_step)
         if step%100==0:
