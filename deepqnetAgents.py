@@ -6,84 +6,96 @@ import game
 import util
 from learningAgents import ReinforcementAgent
 
+class QFunction:
+
+    def addConv2d(self,layer, size, channels, filters):
+        weight = tf.Variable(tf.random_normal([size, size, channels, filters], stddev=0.01))
+        bias = tf.Variable(tf.constant(0.1, shape=[filters]))
+        conv = tf.nn.conv2d(layer, weight, strides=[1, 1, 1, 1], padding="VALID") + bias
+        layer = tf.nn.relu(conv)
+        self.var.append(weight)
+        self.var.append(bias)
+        tf.summary.histogram("weight", weight)
+        tf.summary.histogram("bias", bias)
+        return layer
+
+    def addLayer(self,layer, indim, outdim, actfn=None):
+        weight = tf.Variable(tf.random_normal([indim, outdim],stddev=0.01))
+        bias = tf.Variable(tf.constant(0.1, shape=[outdim]))
+        layer = tf.matmul(layer, weight) + bias
+        if actfn is not None:
+            layer = actfn(layer)
+        self.var.append(weight)
+        self.var.append(bias)
+        tf.summary.histogram("weight", weight)
+        tf.summary.histogram("bias", bias)
+        return layer
+
+    def __init__(self,x,channels,ydim,keep_prob):
+        self.var=[]
+
+        layer = self.addConv2d(x, 4, channels, 64)
+
+        layer = self.addConv2d(layer, 3, 64, 64)
+
+        layerShape = layer.get_shape().as_list()
+        indim = layerShape[1] * layerShape[2] * layerShape[3];
+        layer = tf.reshape(layer, [-1, indim])
+        layer = self.addLayer(layer, indim, 256, actfn=tf.nn.relu)
+        layer = tf.nn.dropout(layer, keep_prob=keep_prob)
+
+        self.y = self.addLayer(layer, 256, ydim)
+
+
 class DeepQNet:
     def __del__(self):
         self.sess.close()
 
     def __init__(self,width,height,channels,ydim,logdir=None,savedir=None):
-        graph=tf.Graph()
-        with graph.as_default():
-            self.ydim=ydim
-            self.x=tf.placeholder(tf.float32,[None,width,height,channels])
-            self.qvalue=tf.placeholder(tf.float32,[None])
-            self.reward=tf.placeholder(tf.float32,[None])
-            self.actions=tf.placeholder(tf.float32,[None,self.ydim])
-            self.keep_prob=tf.placeholder(tf.float32)
+        self.ydim=ydim
+        self.qvalue=tf.placeholder(tf.float32,[None])
+        self.reward=tf.placeholder(tf.float32,[None])
+        self.actions=tf.placeholder(tf.float32,[None,self.ydim])
+        self.keep_prob=tf.placeholder(tf.float32)
+        self.x = tf.placeholder(tf.float32, [None, width, height, channels])
 
-            size=4;filters=64
-            weight=tf.Variable(tf.random_normal([size,size,channels,filters],stddev=0.01))
-            bias=tf.Variable(tf.constant(0.1,shape=[filters]))
-            conv=tf.nn.conv2d(self.x,weight,strides=[1,1,1,1],padding="VALID")+bias
-            layer=tf.nn.relu(conv)
-            #layer=tf.nn.max_pool(layer,ksize=[1,2,2,1],strides=[1,2,2,1],padding="SAME")
-            tf.summary.histogram("weight1",weight)
-            tf.summary.histogram("bias1",bias)
+        self.qfunc=QFunction(self.x,channels,self.ydim,self.keep_prob)
+        self.tfunc=QFunction(self.x,channels,self.ydim,1)
+        self.sychro=[]
+        for i,var in enumerate(self.qfunc.var):
+            self.sychro.append(tf.assign(self.tfunc.var[i],var))
 
-            size=3;channels=filters;filters=64
-            weight=tf.Variable(tf.random_normal([size,size,channels,filters],stddev=0.01))
-            bias=tf.Variable(tf.constant(0.1,shape=[filters]))
-            conv=tf.nn.conv2d(layer,weight,strides=[1,1,1,1],padding="VALID")+bias
-            layer=tf.nn.relu(conv)
-            #layer=tf.nn.max_pool(layer,ksize=[1,2,2,1],strides=[1,2,2,1],padding="SAME")
-            tf.summary.histogram("weight2",weight)
-            tf.summary.histogram("bias2",bias)
+        discount=tf.constant(0.9)
+        newQ=self.reward+discount*self.qvalue
+        predictQ=tf.reduce_sum(self.qfunc.y*self.actions,reduction_indices=1)
+        loss=tf.reduce_sum(tf.square(newQ-predictQ))
+        tf.summary.scalar("loss",loss)
+        tf.summary.histogram("qvalue",predictQ)
 
-            layerShape=layer.get_shape().as_list()
-            indim=layerShape[1]*layerShape[2]*layerShape[3];outdim=256
-            flat=tf.reshape(layer,[-1,indim])
-            weight=tf.Variable(tf.random_normal([indim,outdim]))
-            bias=tf.Variable(tf.constant(0.1,shape=[outdim]))
-            layer=tf.nn.relu(tf.matmul(flat,weight)+bias)
-            layer=tf.nn.dropout(layer,keep_prob=self.keep_prob)
-            tf.summary.histogram("weight3",weight)
-            tf.summary.histogram("bias3",bias)
+        self.global_step=tf.Variable(0,trainable=False)
+        optimizer=tf.train.RMSPropOptimizer(0.001,decay=0.99)
+        self.rmsprop=optimizer.minimize(loss,global_step=self.global_step)
 
-            indim=outdim;outdim=self.ydim;
-            weight=tf.Variable(tf.random_normal([indim,outdim],stddev=0.01))
-            bias=tf.Variable(tf.constant(0.1,shape=[outdim]))
-            self.y=tf.matmul(layer,weight)+bias
-            tf.summary.histogram("weight4",weight)
-            tf.summary.histogram("bias4",bias)
+        self.sess=tf.Session()
+        self.sess.run(tf.global_variables_initializer())
 
-            discount=tf.constant(0.9)
-            newQ=self.reward+discount*self.qvalue
-            predictQ=tf.reduce_sum(self.y*self.actions,reduction_indices=1)
-            loss=tf.reduce_sum(tf.square(newQ-predictQ))
-            tf.summary.scalar("loss",loss)
-            tf.summary.histogram("Qvalue",predictQ)
-
-            self.global_step=tf.Variable(0,trainable=False)
-            optimizer=tf.train.RMSPropOptimizer(0.001,decay=0.99)
-            self.rmsprop=optimizer.minimize(loss,global_step=self.global_step)
-
-            self.sess=tf.Session()
-            self.sess.run(tf.global_variables_initializer())
-
+        self.logdir=logdir
+        if self.logdir is not None:
+            self.writer=tf.summary.FileWriter(self.logdir,self.sess.graph)
+            self.summary=tf.summary.merge_all()
+        self.savedir=savedir
+        if self.savedir is not None:
             self.saver = tf.train.Saver()
-            self.logdir=logdir
-            if self.logdir is not None:
-                self.writer=tf.summary.FileWriter(self.logdir,self.sess.graph)
-                self.summary=tf.summary.merge_all()
-            self.savedir=savedir
-            if self.savedir is not None:
-                savefile=tf.train.latest_checkpoint(self.savedir)
-                if savefile is not None:
-                    self.saver.restore(self.sess,savefile)
+            savefile=tf.train.latest_checkpoint(self.savedir)
+            if savefile is not None:
+                self.saver.restore(self.sess,savefile)
 
     def train(self,state,actions,reward,qvalue):
-        feed_dict={self.x:state,self.qvalue:qvalue,self.actions:actions,self.reward:reward,self.keep_prob:0.5}
+        feed_dict={self.x:state,self.actions:actions,self.reward:reward,self.qvalue:qvalue,self.keep_prob:0.5}
         _,step=self.sess.run([self.rmsprop,self.global_step],feed_dict=feed_dict)
         #step=tf.train.global_step(self.sess, self.global_step)
+        if step%100==0:
+            self.sess.run(self.sychro)
         if self.logdir is not None:
             if step%100==0:
                 summary=self.sess.run(self.summary,feed_dict=feed_dict)
@@ -93,20 +105,16 @@ class DeepQNet:
                 self.saver.save(self.sess, self.savedir, global_step=step)
         return step
 
-    def qvalue_vector(self,batchSize,state):
-        feed_dict={self.x:state,self.qvalue:np.zeros(batchSize),self.actions:np.zeros([batchSize,self.ydim]),self.reward:np.zeros(batchSize),self.keep_prob:1.0}
-        qvalue=self.sess.run(self.y,feed_dict=feed_dict)
+    def max_qvalue(self,state):
+        feed_dict={self.x:state}
+        qvalue=self.sess.run(self.tfunc.y,feed_dict=feed_dict)
         qvalue=np.amax(qvalue,axis=1)
         return qvalue
 
     def qvalue_distribution(self,state):
-        feed_dict={self.x:state,self.qvalue:np.zeros(1),self.actions:np.zeros([1,self.ydim]),self.reward:np.zeros(1),self.keep_prob:1.0}
-        qvalue=self.sess.run(self.y,feed_dict=feed_dict)
+        feed_dict={self.x:state,self.keep_prob:1.0}
+        qvalue=self.sess.run(self.qfunc.y,feed_dict=feed_dict)
         return qvalue[0]
-
-    def copyto(self,other,dir):
-        saved=self.saver.save(self.sess,dir)
-        other.saver.restore(other.sess,saved)
 
 def getDirection(index):
     if index==0.:
@@ -171,8 +179,7 @@ class DQNAgent(ReinforcementAgent):
         self.startCount=1000
         self.count=0
         self.dqn=None
-        self.target=None
-        self.synchroStep=1000
+        self.synchroStep=100
 
     def registerInitialState(self,state):
         super().registerInitialState(state)
@@ -184,8 +191,6 @@ class DQNAgent(ReinforcementAgent):
         if self.dqn is None:
             #self.dqn = DeepQNet(width, height, channels,ydim,logdir="../logs/",savedir="../save/")
             self.dqn = DeepQNet(width, height, channels, ydim,logdir="../logs/")
-        if self.target is None:
-            self.target=DeepQNet(width,height,channels,ydim)
 
     def getPolicy(self,state,legalActions):
         state=translateState(state)
@@ -244,7 +249,5 @@ class DQNAgent(ReinforcementAgent):
             action.append(frame[1])
             nextState.append(frame[2])
             reward.append(frame[3])
-        qvalue=self.target.qvalue_vector(self.batchSize,nextState)
-        step=self.dqn.train(state,action,reward,qvalue)
-        if step%self.synchroStep==0:
-            self.dqn.copyto(self.target,"../save/tmp")
+        qvalue=self.dqn.max_qvalue(nextState)
+        self.dqn.train(state,action,reward,qvalue)
