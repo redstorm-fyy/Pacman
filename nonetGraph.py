@@ -12,15 +12,17 @@ class BonePosition:
         return result
 
     def calclocation(self):#->[vertexNum,matx]
-        pose = tf.gather(self.pose, self.boneindex)  # [boneNum,matx,maty],[vertexNum,vbnum]->[vertexNum,vbnum,matx,maty]
-        bone = tf.gather(self.boneVar, self.boneindex) # [boneNum,matx,maty],[vertexNum,vbnum]->[vertexNum,vbnum,matx,maty]
-        vertex=tf.reshape(self.vertex,[self.vertexNum,1,self.maty])
+        pose = tf.gather(self.pose, self.index)  # [boneNum,matx,maty],[vertexNum,vbnum]->[vertexNum,vbnum,matx,maty]
+        bone = tf.gather(self.boneVar, self.index) # [boneNum,matx,maty],[vertexNum,vbnum]->[vertexNum,vbnum,matx,maty]
+        cat=tf.constant(1.0,dtype=tf.float32,shape=[self.vertexNum,1])
+        vertex=tf.concat([self.vertex,cat],axis=1)#[vertexNum,matx+1],makesure maty=matx+1
+        vertex=tf.reshape(vertex,[self.vertexNum,1,self.maty])
         vertex=tf.tile(vertex,[1,self.vbnum,1])#[vertexNum,vbnum,maty]
         cat=tf.slice(vertex,[0,0,self.maty-1],[self.vertexNum,self.vbnum,1])# slice vertex.w [vertexNum,vbnum,1]
         location = self.matmulvector(pose, vertex)  # [vertexNum,vbnum,matx]
         location = tf.concat([location, cat], axis=2)  # [vertexNum,vbnum,matx+1]
         location = self.matmulvector(bone, location)  #  makesure matx+1==maty, [vertexNum,vbnum,matx]
-        weight=tf.reshape(self.boneweight,[self.vertexNum,self.vbnum,1])
+        weight=tf.reshape(self.weight,[self.vertexNum,self.vbnum,1])
         location=location*weight #[vertexNum,vbnum,matx]
         location=tf.reduce_sum(location,axis=[1])#[vertexNum,matx]
         return location
@@ -33,8 +35,8 @@ class BonePosition:
         return loss
 
     def __init__(self,featureNum,boneNum,vertexNum,logdir=None):
-        self.speed=0.1
-        self.trainNum=50
+        self.speed=0.0001
+        self.trainNum=200
 
         self.matx=3
         self.maty=self.matx+1
@@ -49,9 +51,9 @@ class BonePosition:
         self.boneInit=tf.assign(self.boneVar,self.bone)
 
         self.pose=tf.placeholder(tf.float32,shape=[self.boneNum,self.matx,self.maty])
-        self.vertex=tf.placeholder(tf.float32,shape=[self.vertexNum,self.maty])
-        self.boneweight=tf.placeholder(tf.float32,shape=[self.vertexNum,self.vbnum])
-        self.boneindex=tf.placeholder(tf.int32,shape=[self.vertexNum,self.vbnum])
+        self.vertex=tf.placeholder(tf.float32,shape=[self.vertexNum,self.matx])
+        self.weight=tf.placeholder(tf.float32,shape=[self.vertexNum,self.vbnum])
+        self.index=tf.placeholder(tf.int32,shape=[self.vertexNum,self.vbnum])
 
         self.loc=self.calclocation()#[vertexNum,matx]
         self.loss=self.calcloss(self.loc)
@@ -83,20 +85,94 @@ class BonePosition:
         self.sess.run(self.boneInit,feed_dict={self.bone:feed_dict[self.bone]})
         return self.sess.run(self.loc,feed_dict=feed_dict)
 
-bp=BonePosition(1,1,1,"../logs")
-feed_dict={bp.feature:[[330.0,900.0,1600.0]],
-           bp.bone:[[[1.0,2.0,3.0,4.0],
-                    [5.0, 6.0, 7.0,8.0],
-                    [9.0, 10.0, 11.0,12.0]]],
-           bp.pose:[[[1.1,2.1,3.1,4.1],
-                    [5.1, 6.1, 7.1,8.1],
-                    [9.1, 10.1, 11.1,12.1]]],
-           bp.vertex:[[1.3,2.3,3.3,1.0]],
-           bp.boneweight:[[0.6,0.2,0.1,0.1]],
-           bp.boneindex:[[0,0,0,0]]}
 
-print(bp.location(feed_dict))
+def ReadMatrixlist(f):
+    mlist=[]
+    lines=f.readlines()
+    for s in lines:
+        numArray=s.split(b"\t")
+        mat=np.zeros([3,4],dtype=np.float32)
+        for i in range(0,3):
+            for j in range(0,4):
+                mat[i][j]=numArray[i*4+j]
+        mlist.append(mat)
+    return mlist
+
+def ReadVectorlist(f):
+    vlist = []
+    lines = f.readlines()
+    for s in lines:
+        numArray = s.split(b"\t")
+        vec = np.zeros([3], dtype=np.float32)
+        for i in range(0, 3):
+            vec[i] = numArray[i]
+        vlist.append(vec)
+    return vlist
+
+def ReadBone():
+    with open("../graph/bones.txt","rb") as f:
+        return ReadMatrixlist(f)
+def ReadPose():
+    with open("../graph/bindpose.txt","rb") as f:
+        return ReadMatrixlist(f)
+
+def ReadVertex():
+    with open("../graph/vertices.txt","rb") as f:
+        return ReadVectorlist(f)
+def ReadFeature():
+    with open("../graph/new_vertices.txt","rb") as f:
+        return ReadVectorlist(f)
+
+def ReadIndexAndWeight():
+    with open("../graph/weights.txt","rb") as f:
+        ilist=[]
+        wlist=[]
+        lines=f.readlines()
+        for s in lines:
+            numArray=s.split(b"\t")
+            index=np.zeros([4],dtype=np.int32)
+            weight=np.zeros([4],dtype=np.float32)
+            for i in range(0,4):
+                index[i]=numArray[i*2]
+                weight[i]=numArray[i*2+1]
+            ilist.append(index)
+            wlist.append(weight)
+        return ilist,wlist
+
+def Writebone(bone):
+    with open("../graph/new_bone.txt","wb") as f:
+        for b in bone:
+            b=np.array(b)
+            b.tofile(f,sep="\t")
+            f.write(b"\r\n")
+
+bone=ReadBone()
+pose=ReadPose()
+vertex=ReadVertex()
+index,weight=ReadIndexAndWeight()
+feature=ReadFeature()
+
+featureNum=len(feature)
+boneNum=len(bone)
+poseNum=len(pose)
+vertexNum=len(vertex)
+indexNum=len(index)
+weightNum=len(weight)
+
+print(featureNum,boneNum,poseNum,vertexNum,indexNum,weightNum)
+
+bp=BonePosition(featureNum,boneNum,vertexNum,"../logs")
+feed_dict={bp.feature:feature,
+           bp.bone:bone,
+           bp.pose:pose,
+           bp.vertex:vertex,
+           bp.weight:weight,
+           bp.index:index}
+
+print("begin training")
+#print(bp.location(feed_dict))
 bone=bp.train(feed_dict)
-print(bone)
-feed_dict[bp.bone]=bone
-print(bp.location(feed_dict))
+Writebone(bone)
+#print(bone)
+#feed_dict[bp.bone]=bone
+#print(bp.location(feed_dict))
