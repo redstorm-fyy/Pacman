@@ -1,4 +1,5 @@
 import tensorflow as tf
+import numpy as np
 
 class BonePosition:
     def __del__(self):
@@ -31,10 +32,13 @@ class BonePosition:
         loss=tf.reduce_sum(tf.reduce_min(loss,axis=1))
         return loss
 
-    def __init__(self,featureNum,boneNum,vertexNum):
+    def __init__(self,featureNum,boneNum,vertexNum,logdir=None):
+        self.speed=0.1
+        self.trainNum=50
+
         self.matx=3
         self.maty=self.matx+1
-        self.vbnum=5 #one vertex connects vbnum bones
+        self.vbnum=4 #one vertex connects vbnum bones
         self.featureNum=featureNum
         self.boneNum=boneNum
         self.vertexNum=vertexNum
@@ -49,21 +53,50 @@ class BonePosition:
         self.boneweight=tf.placeholder(tf.float32,shape=[self.vertexNum,self.vbnum])
         self.boneindex=tf.placeholder(tf.int32,shape=[self.vertexNum,self.vbnum])
 
-        location=self.calclocation()#[vertexNum,matx]
-        loss=self.calcloss(location)
-        self.train=tf.train.RMSPropOptimizer(0.1).minimize(loss)
+        self.loc=self.calclocation()#[vertexNum,matx]
+        self.loss=self.calcloss(self.loc)
+        self.opt=tf.train.RMSPropOptimizer(self.speed).minimize(self.loss)
+        tf.summary.scalar("loss", self.loss)
 
         self.sess=tf.Session()
         init=tf.global_variables_initializer()
         self.sess.run(init)
 
+        self.logdir=logdir
+        if self.logdir is not None:
+            self.writer=tf.summary.FileWriter(self.logdir,self.sess.graph)
+            self.summary=tf.summary.merge_all()
+
+
     def train(self,feed_dict):
         self.sess.run(self.boneInit,feed_dict={self.bone:feed_dict[self.bone]})
-        for i in range(0,50):
-            self.sess.run(self.train,feed_dict=feed_dict)
+        for i in range(0,self.trainNum):
+            self.sess.run(self.opt,feed_dict=feed_dict)
+            if self.logdir is not None:
+                summary=self.sess.run(self.summary,feed_dict=feed_dict)
+                self.writer.add_summary(summary,i+1)
+
         bone=self.sess.run(self.boneVar)
         return bone
 
-bp=BonePosition(11,12,13)
+    def location(self,feed_dict):
+        self.sess.run(self.boneInit,feed_dict={self.bone:feed_dict[self.bone]})
+        return self.sess.run(self.loc,feed_dict=feed_dict)
 
-bp.train({bp.feature:{},bp.bone:{},bp.pose:{},bp.vertex:{},bp.boneweight:{},bp.boneindex:{}})
+bp=BonePosition(1,1,1,"../logs")
+feed_dict={bp.feature:[[330.0,900.0,1600.0]],
+           bp.bone:[[[1.0,2.0,3.0,4.0],
+                    [5.0, 6.0, 7.0,8.0],
+                    [9.0, 10.0, 11.0,12.0]]],
+           bp.pose:[[[1.1,2.1,3.1,4.1],
+                    [5.1, 6.1, 7.1,8.1],
+                    [9.1, 10.1, 11.1,12.1]]],
+           bp.vertex:[[1.3,2.3,3.3,1.0]],
+           bp.boneweight:[[0.6,0.2,0.1,0.1]],
+           bp.boneindex:[[0,0,0,0]]}
+
+print(bp.location(feed_dict))
+bone=bp.train(feed_dict)
+print(bone)
+feed_dict[bp.bone]=bone
+print(bp.location(feed_dict))
