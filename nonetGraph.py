@@ -1,13 +1,14 @@
 import tensorflow as tf
 import numpy as np
+from tensorflow.python.client import timeline
 
 class BonePosition:
     def __del__(self):
         self.sess.close()
 
-    def matmulvector(self,mat,vec):#[vertexNum,vbnum,matx,maty]*[vertexNum,vbnum,maty]->[vertexNum,vbnum,matx]
+    def matmulvector(self,mat,vec,name):#[vertexNum,vbnum,matx,maty]*[vertexNum,vbnum,maty]->[vertexNum,vbnum,matx]
         vec=tf.reshape(vec,[self.vertexNum,self.vbnum,self.maty,1])
-        result=tf.matmul(mat,vec)#[vertexNum,vbnum,matx,1]
+        result=tf.matmul(mat,vec,name=name)#[vertexNum,vbnum,matx,1]
         result=tf.reshape(result,[self.vertexNum,self.vbnum,self.matx])
         return result
 
@@ -19,9 +20,9 @@ class BonePosition:
         vertex=tf.reshape(vertex,[self.vertexNum,1,self.maty])
         vertex=tf.tile(vertex,[1,self.vbnum,1])#[vertexNum,vbnum,maty]
         cat=tf.slice(vertex,[0,0,self.maty-1],[self.vertexNum,self.vbnum,1])# slice vertex.w [vertexNum,vbnum,1]
-        location = self.matmulvector(pose, vertex)  # [vertexNum,vbnum,matx]
+        location = self.matmulvector(pose, vertex,"matmulpose")  # [vertexNum,vbnum,matx]
         location = tf.concat([location, cat], axis=2)  # [vertexNum,vbnum,matx+1]
-        location = self.matmulvector(bone, location)  #  makesure matx+1==maty, [vertexNum,vbnum,matx]
+        location = self.matmulvector(bone, location,"matmulbone")  #  makesure matx+1==maty, [vertexNum,vbnum,matx]
         weight=tf.reshape(self.weight,[self.vertexNum,self.vbnum,1])
         location=location*weight #[vertexNum,vbnum,matx]
         location=tf.reduce_sum(location,axis=[1])#[vertexNum,matx]
@@ -34,22 +35,19 @@ class BonePosition:
         loss=tf.reduce_sum(tf.reduce_min(loss,axis=1))
         return loss
 
-    def __init__(self,featureNum,boneNum,vertexNum,logdir=None):
+    def __init__(self,featureNum,boneNum,vertexNum,logdir=None,profile=None):
         self.speed=0.0001
         self.trainNum=200
-
         self.matx=3
         self.maty=self.matx+1
         self.vbnum=4 #one vertex connects vbnum bones
         self.featureNum=featureNum
         self.boneNum=boneNum
         self.vertexNum=vertexNum
-
         self.feature=tf.placeholder(tf.float32,shape=[self.featureNum,self.matx])
         self.bone=tf.placeholder(tf.float32,shape=[self.boneNum,self.matx,self.maty])
         self.boneVar=tf.Variable(tf.constant(0.0,dtype=tf.float32,shape=[self.boneNum,self.matx,self.maty]))
         self.boneInit=tf.assign(self.boneVar,self.bone)
-
         self.pose=tf.placeholder(tf.float32,shape=[self.boneNum,self.matx,self.maty])
         self.vertex=tf.placeholder(tf.float32,shape=[self.vertexNum,self.matx])
         self.weight=tf.placeholder(tf.float32,shape=[self.vertexNum,self.vbnum])
@@ -61,30 +59,39 @@ class BonePosition:
         tf.summary.scalar("loss", self.loss)
 
         self.sess=tf.Session()
-        init=tf.global_variables_initializer()
-        self.sess.run(init)
-
         self.logdir=logdir
         if self.logdir is not None:
             self.writer=tf.summary.FileWriter(self.logdir,self.sess.graph)
             self.summary=tf.summary.merge_all()
+        self.profile=profile
 
+    def writeprofile(self,metadata):
+        if self.profile is None:
+            return
+        tl=timeline.Timeline(metadata.step_stats)
+        ctf=tl.generate_chrome_trace_format(show_dataflow=True,show_memory=True)
+        #ctf = tl.generate_chrome_trace_format()
+        with open(self.profile,"w") as f:
+            f.write(ctf)
 
     def train(self,feed_dict):
-        self.sess.run(self.boneInit,feed_dict={self.bone:feed_dict[self.bone]})
+        options=None
+        metadata=None
+        if self.profile is not None:
+            options=tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+            metadata=tf.RunMetadata()
+            self.trainNum=1
+        self.sess.run(tf.global_variables_initializer(),options=options,run_metadata=metadata)
+        self.sess.run(self.boneInit,feed_dict={self.bone:feed_dict[self.bone]},options=options,run_metadata=metadata)
         for i in range(0,self.trainNum):
-            self.sess.run(self.opt,feed_dict=feed_dict)
+            self.sess.run(self.opt,feed_dict=feed_dict,options=options,run_metadata=metadata)
+            self.writeprofile(metadata)
             if self.logdir is not None:
-                summary=self.sess.run(self.summary,feed_dict=feed_dict)
+                summary=self.sess.run(self.summary,feed_dict=feed_dict,options=options,run_metadata=metadata)
+                #self.writeprofile(metadata)
                 self.writer.add_summary(summary,i+1)
-
-        bone=self.sess.run(self.boneVar)
+        bone=self.sess.run(self.boneVar,options=options,run_metadata=metadata)
         return bone
-
-    def location(self,feed_dict):
-        self.sess.run(self.boneInit,feed_dict={self.bone:feed_dict[self.bone]})
-        return self.sess.run(self.loc,feed_dict=feed_dict)
-
 
 def ReadMatrixlist(f):
     mlist=[]
@@ -139,7 +146,7 @@ def ReadIndexAndWeight():
             wlist.append(weight)
         return ilist,wlist
 
-def Writebone(bone):
+def WriteNewBone(bone):
     with open("../graph/new_bone.txt","wb") as f:
         for b in bone:
             b=np.array(b)
@@ -161,7 +168,7 @@ weightNum=len(weight)
 
 print(featureNum,boneNum,poseNum,vertexNum,indexNum,weightNum)
 
-bp=BonePosition(featureNum,boneNum,vertexNum,"../logs")
+bp=BonePosition(featureNum,boneNum,vertexNum,"../logs","../timeline.json")
 feed_dict={bp.feature:feature,
            bp.bone:bone,
            bp.pose:pose,
@@ -170,9 +177,5 @@ feed_dict={bp.feature:feature,
            bp.index:index}
 
 print("begin training")
-#print(bp.location(feed_dict))
 bone=bp.train(feed_dict)
-Writebone(bone)
-#print(bone)
-#feed_dict[bp.bone]=bone
-#print(bp.location(feed_dict))
+WriteNewBone(bone)
