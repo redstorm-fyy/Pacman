@@ -6,33 +6,34 @@ class BonePosition:
     def __del__(self):
         self.sess.close()
 
-    def matmulvector(self,mat,vec,name):#[vertexNum,vbnum,matx,maty]*[vertexNum,vbnum,maty]->[vertexNum,vbnum,matx]
-        vec=tf.reshape(vec,[self.vertexNum,self.vbnum,self.maty,1])
-        result=tf.matmul(mat,vec,name=name)#[vertexNum,vbnum,matx,1]
-        result=tf.reshape(result,[self.vertexNum,self.vbnum,self.matx])
-        return result
-
     def calclocation(self):#->[vertexNum,matx]
-        pose = tf.gather(self.pose, self.index)  # [boneNum,matx,maty],[vertexNum,vbnum]->[vertexNum,vbnum,matx,maty]
-        bone = tf.gather(self.boneVar, self.index) # [boneNum,matx,maty],[vertexNum,vbnum]->[vertexNum,vbnum,matx,maty]
+        pose = tf.gather(self.pose, self.index,name="gather_pose")  # [boneNum,matx,maty],[vertexNum,vbnum]->[vertexNum,vbnum,matx,maty]
+        bone = tf.gather(self.boneVar, self.index,name="gather_bone") # [boneNum,matx,maty],[vertexNum,vbnum]->[vertexNum,vbnum,matx,maty]
         cat=tf.constant(1.0,dtype=tf.float32,shape=[self.vertexNum,1])
-        vertex=tf.concat([self.vertex,cat],axis=1)#[vertexNum,matx+1],makesure maty=matx+1
-        vertex=tf.reshape(vertex,[self.vertexNum,1,self.maty])
-        vertex=tf.tile(vertex,[1,self.vbnum,1])#[vertexNum,vbnum,maty]
-        cat=tf.slice(vertex,[0,0,self.maty-1],[self.vertexNum,self.vbnum,1])# slice vertex.w [vertexNum,vbnum,1]
-        location = self.matmulvector(pose, vertex,"matmulpose")  # [vertexNum,vbnum,matx]
-        location = tf.concat([location, cat], axis=2)  # [vertexNum,vbnum,matx+1]
-        location = self.matmulvector(bone, location,"matmulbone")  #  makesure matx+1==maty, [vertexNum,vbnum,matx]
+        vertex=tf.concat([self.vertex,cat],axis=1,name="concat_vertex") #[vertexNum,matx+1],makesure maty=matx+1
+        cat=tf.reshape(cat,[self.vertexNum,1,1])
+        cat=tf.tile(cat,[1,self.vbnum,1]) #[vertexNum,vbnum,1]
+
+        vertex=tf.reshape(vertex,[self.vertexNum,self.maty,1])
+        pose=tf.reshape(pose,[self.vertexNum,self.vbnum*self.matx,self.maty])
+        location=tf.matmul(pose,vertex,name="matmul_pose") #[vertexNum,vbnum*matx,1]
+        location=tf.reshape(location,[self.vertexNum,self.vbnum,self.matx])
+
+        location=tf.concat([location,cat],axis=2,name="concat_location") #[vertexNum,vbnum,matx+1]
+        location=tf.reshape(location,[self.vertexNum,self.vbnum,self.maty,1])
+        location=tf.matmul(bone,location,name="matmul_bone") #[vertexNum,vbnum,matx,1]
+        location=tf.reshape(location,[self.vertexNum,self.vbnum,self.matx])
+
         weight=tf.reshape(self.weight,[self.vertexNum,self.vbnum,1])
-        location=location*weight #[vertexNum,vbnum,matx]
-        location=tf.reduce_sum(location,axis=[1])#[vertexNum,matx]
+        location=tf.multiply(location,weight,name="multiply_weight") #[vertexNum,vbnum,matx]
+        location=tf.reduce_sum(location,axis=[1],name="sum_weight")#[vertexNum,matx]
         return location
 
     def calcloss(self,location):
         location=tf.expand_dims(location,axis=0) #[1,vertexNum,matx]
         feature=tf.expand_dims(self.feature,axis=1) #[featureNum,1,matx]
-        loss=tf.reduce_sum(tf.squared_difference(location,feature),2) #[featureNum,vertexNum]
-        loss=tf.reduce_sum(tf.reduce_min(loss,axis=1))
+        loss=tf.reduce_sum(tf.squared_difference(location,feature,name="square"),axis=2,name="distance") #[featureNum,vertexNum]
+        loss=tf.reduce_sum(tf.reduce_min(loss,axis=1,name="min_distance"),name="sum_loss")
         return loss
 
     def __init__(self,featureNum,boneNum,vertexNum,logdir=None,profile=None):
@@ -168,7 +169,10 @@ weightNum=len(weight)
 
 print(featureNum,boneNum,poseNum,vertexNum,indexNum,weightNum)
 
-bp=BonePosition(featureNum,boneNum,vertexNum,"../logs","../timeline.json")
+bp=BonePosition(featureNum,boneNum,vertexNum,None,"../timeline.json")
+#bp=BonePosition(featureNum,boneNum,vertexNum,"../logs")
+#bp=BonePosition(featureNum,boneNum,vertexNum)
+
 feed_dict={bp.feature:feature,
            bp.bone:bone,
            bp.pose:pose,
