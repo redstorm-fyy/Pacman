@@ -12,7 +12,7 @@ class BonePosition:
         cat=tf.constant(1.0,dtype=tf.float32,shape=[self.vertexNum,1])
         vertex=tf.concat([self.vertex,cat],axis=1,name="concat_vertex") #[vertexNum,matx+1],makesure maty=matx+1
         cat=tf.reshape(cat,[self.vertexNum,1,1])
-        cat=tf.tile(cat,[1,self.vbnum,1]) #[vertexNum,vbnum,1]
+        cat=tf.tile(cat,[1,self.vbnum,1],name="tile_cat") #[vertexNum,vbnum,1]
 
         vertex=tf.reshape(vertex,[self.vertexNum,self.maty,1])
         pose=tf.reshape(pose,[self.vertexNum,self.vbnum*self.matx,self.maty])
@@ -29,11 +29,14 @@ class BonePosition:
         location=tf.reduce_sum(location,axis=[1],name="sum_weight")#[vertexNum,matx]
         return location
 
-    def calcloss(self,location):
-        location=tf.expand_dims(location,axis=0) #[1,vertexNum,matx]
-        feature=tf.expand_dims(self.feature,axis=1) #[featureNum,1,matx]
-        loss=tf.reduce_sum(tf.squared_difference(location,feature,name="square"),axis=2,name="distance") #[featureNum,vertexNum]
-        loss=tf.reduce_sum(tf.reduce_min(loss,axis=1,name="min_distance"),name="sum_loss")
+    def calcloss(self,location): #[vertexNum,matx],[featureNum,matx]->[]
+        ab=tf.matmul(location,tf.transpose(self.feature),name="matmul_loss") #[vertexNum,featureNum]
+        a=tf.reduce_sum(location*location,axis=1,name="sum_location") #[vertexNum]
+        b=tf.reduce_sum(self.feature*self.feature,axis=1,name="sum_feature") #[featureNum]
+        a=tf.reshape(a,[self.vertexNum,1])
+        b=tf.reshape(b,[1,self.featureNum])
+        loss=a-2*ab+b #[vertexNum,featureNum],Distance(A,B)=(A-B)(A-B)=AA-2AB+BB
+        loss=tf.reduce_sum(tf.reduce_min(loss,axis=0,name="min_distance"),name="sum_loss")
         return loss
 
     def __init__(self,featureNum,boneNum,vertexNum,logdir=None,profile=None):
@@ -70,8 +73,8 @@ class BonePosition:
         if self.profile is None:
             return
         tl=timeline.Timeline(metadata.step_stats)
-        ctf=tl.generate_chrome_trace_format(show_dataflow=True,show_memory=True)
-        #ctf = tl.generate_chrome_trace_format()
+        #ctf=tl.generate_chrome_trace_format(show_dataflow=True,show_memory=True)
+        ctf = tl.generate_chrome_trace_format()
         with open(self.profile,"w") as f:
             f.write(ctf)
 
@@ -82,14 +85,12 @@ class BonePosition:
             options=tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
             metadata=tf.RunMetadata()
             self.trainNum=1
-        self.sess.run(tf.global_variables_initializer(),options=options,run_metadata=metadata)
-        self.sess.run(self.boneInit,feed_dict={self.bone:feed_dict[self.bone]},options=options,run_metadata=metadata)
+        self.sess.run([tf.global_variables_initializer(),self.boneInit],feed_dict={self.bone:feed_dict[self.bone]},options=options,run_metadata=metadata)
         for i in range(0,self.trainNum):
             self.sess.run(self.opt,feed_dict=feed_dict,options=options,run_metadata=metadata)
             self.writeprofile(metadata)
             if self.logdir is not None:
                 summary=self.sess.run(self.summary,feed_dict=feed_dict,options=options,run_metadata=metadata)
-                #self.writeprofile(metadata)
                 self.writer.add_summary(summary,i+1)
         bone=self.sess.run(self.boneVar,options=options,run_metadata=metadata)
         return bone
