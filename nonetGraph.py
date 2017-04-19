@@ -1,3 +1,28 @@
+'''
+this is the calculation of bones
+Vector3 Mul(Matrix4x4 matrix, Vector3 point)
+{
+    Vector4 p = point;
+    p.w = 1;
+    Vector3 r;
+    r.x = Vector4.Dot(p, new Vector4(matrix.m00, matrix.m01, matrix.m02, matrix.m03));
+    r.y = Vector4.Dot(p, new Vector4(matrix.m10, matrix.m11, matrix.m12, matrix.m13));
+    r.z = Vector4.Dot(p, new Vector4(matrix.m20, matrix.m21, matrix.m22, matrix.m23));
+    return r;
+}
+Vector3 CalculateLocation(Mesh mesh,int vertexIndex)
+{
+    Vector3 point = mesh.vertices[vertexIndex];
+    var bw = mesh.boneWeights[vertexIndex];
+    Vector3 result = Vector3.zero;
+    result += Mul(bones[bw.boneIndex0].localToWorldMatrix, Mul(mesh.bindposes[bw.boneIndex0], point)) * bw.weight0;
+    result += Mul(bones[bw.boneIndex1].localToWorldMatrix, Mul(mesh.bindposes[bw.boneIndex1], point)) * bw.weight1;
+    result += Mul(bones[bw.boneIndex2].localToWorldMatrix, Mul(mesh.bindposes[bw.boneIndex2], point)) * bw.weight2;
+    result += Mul(bones[bw.boneIndex3].localToWorldMatrix, Mul(mesh.bindposes[bw.boneIndex3], point)) * bw.weight3;
+    return result;
+}
+'''
+
 import tensorflow as tf
 import numpy as np
 from tensorflow.python.client import timeline
@@ -86,7 +111,7 @@ class BonePosition:
         if self.profile is not None:
             options=tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
             metadata=tf.RunMetadata()
-            self.trainNum=1
+            self.trainNum=2
         self.sess.run([tf.global_variables_initializer(),self.boneInit],feed_dict={self.bone:feed_dict[self.bone]},options=options,run_metadata=metadata)
         for i in range(0,self.trainNum):
             self.sess.run(self.opt,feed_dict=feed_dict,options=options,run_metadata=metadata)
@@ -205,8 +230,8 @@ def BonePositionWithLog(featureNum,boneNum,vertexNum,logdir):
     return bp
 
 #bp=BonePosition(featureNum,boneNum,vertexNum)
-bp=BonePositionWithLog(featureNum,boneNum,vertexNum,"../logs")
-#bp=BonePosition(featureNum,boneNum,vertexNum,None,"../timeline.json")
+#bp=BonePositionWithLog(featureNum,boneNum,vertexNum,"../logs")
+bp=BonePosition(featureNum,boneNum,vertexNum,None,"../timeline.json")
 
 feed_dict={bp.feature:feature,
            bp.bone:bone,
