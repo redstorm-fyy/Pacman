@@ -1,6 +1,8 @@
 import tensorflow as tf
 import numpy as np
 from tensorflow.python.client import timeline
+from datetime import datetime
+import os
 
 class BonePosition:
     def __del__(self):
@@ -40,8 +42,8 @@ class BonePosition:
         return loss
 
     def __init__(self,featureNum,boneNum,vertexNum,logdir=None,profile=None):
-        self.speed=0.0001
-        self.trainNum=200
+        self.speed=0.0003
+        self.trainNum=70
         self.matx=3
         self.maty=self.matx+1
         self.vbnum=4 #one vertex connects vbnum bones
@@ -65,7 +67,7 @@ class BonePosition:
         self.sess=tf.Session()
         self.logdir=logdir
         if self.logdir is not None:
-            self.writer=tf.summary.FileWriter(self.logdir,self.sess.graph)
+            self.writer=tf.summary.FileWriter(self.logdir,self.sess.graph,flush_secs=10)
             self.summary=tf.summary.merge_all()
         self.profile=profile
 
@@ -118,22 +120,24 @@ def ReadVectorlist(f):
         vlist.append(vec)
     return vlist
 
+graphdir="../graph"
+
 def ReadBone():
-    with open("../graph/bones.txt","rb") as f:
+    with open(graphdir+"/bones.txt","rb") as f:
         return ReadMatrixlist(f)
 def ReadPose():
-    with open("../graph/bindpose.txt","rb") as f:
+    with open(graphdir+"/bindpose.txt","rb") as f:
         return ReadMatrixlist(f)
 
 def ReadVertex():
-    with open("../graph/vertices.txt","rb") as f:
+    with open(graphdir+"/vertices.txt","rb") as f:
         return ReadVectorlist(f)
 def ReadFeature():
-    with open("../graph/new_vertices.txt","rb") as f:
+    with open(graphdir+"/new_vertices.txt","rb") as f:
         return ReadVectorlist(f)
 
 def ReadIndexAndWeight():
-    with open("../graph/weights.txt","rb") as f:
+    with open(graphdir+"/weights.txt","rb") as f:
         ilist=[]
         wlist=[]
         lines=f.readlines()
@@ -149,7 +153,7 @@ def ReadIndexAndWeight():
         return ilist,wlist
 
 def WriteNewBone(bone):
-    with open("../graph/new_bone.txt","wb") as f:
+    with open(graphdir+"/new_bone.txt","wb") as f:
         for b in bone:
             b=np.array(b)
             b.tofile(f,sep="\t")
@@ -170,9 +174,39 @@ weightNum=len(weight)
 
 print(featureNum,boneNum,poseNum,vertexNum,indexNum,weightNum)
 
-bp=BonePosition(featureNum,boneNum,vertexNum,None,"../timeline.json")
-#bp=BonePosition(featureNum,boneNum,vertexNum,"../logs")
+def DeleteLogDir(logdir):
+    import stat
+    for f in os.listdir(logdir):
+        subdir=os.path.join(logdir,f)
+        for f in os.listdir(subdir):
+            path=os.path.join(subdir,f)
+            if not os.access(path,os.W_OK):
+                try:
+                    os.chmod(path,stat.S_IWUSR)
+                    os.remove(path)
+                except Exception as e:
+                    print(e)
+            else:
+                os.remove(path)
+        try:
+            os.rmdir(subdir)
+        except Exception as e:
+            print(e)
+
+def PrepareCurrentLogDir(logdir):
+    now=datetime.now()
+    subdir=logdir+"/ev_"+now.strftime("%Y%m%d-%H%M%S")
+    return subdir
+
+def BonePositionWithLog(featureNum,boneNum,vertexNum,logdir):
+    #DeleteLogDir(logdir)
+    subdir = PrepareCurrentLogDir(logdir)
+    bp = BonePosition(featureNum, boneNum, vertexNum, subdir)
+    return bp
+
 #bp=BonePosition(featureNum,boneNum,vertexNum)
+bp=BonePositionWithLog(featureNum,boneNum,vertexNum,"../logs")
+#bp=BonePosition(featureNum,boneNum,vertexNum,None,"../timeline.json")
 
 feed_dict={bp.feature:feature,
            bp.bone:bone,
@@ -184,3 +218,4 @@ feed_dict={bp.feature:feature,
 print("begin training")
 bone=bp.train(feed_dict)
 WriteNewBone(bone)
+
