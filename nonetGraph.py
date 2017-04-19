@@ -96,13 +96,13 @@ class BonePosition:
             self.summary=tf.summary.merge_all()
         self.profile=profile
 
-    def writeprofile(self,metadata):
+    def writeprofile(self,metadata,idx):
         if self.profile is None:
             return
         tl=timeline.Timeline(metadata.step_stats)
         #ctf=tl.generate_chrome_trace_format(show_dataflow=True,show_memory=True)
         ctf = tl.generate_chrome_trace_format()
-        with open(self.profile,"w") as f:
+        with open(self.profile+str(idx)+".json","w") as f:
             f.write(ctf)
 
     def train(self,feed_dict):
@@ -115,7 +115,7 @@ class BonePosition:
         self.sess.run([tf.global_variables_initializer(),self.boneInit],feed_dict={self.bone:feed_dict[self.bone]},options=options,run_metadata=metadata)
         for i in range(0,self.trainNum):
             self.sess.run(self.opt,feed_dict=feed_dict,options=options,run_metadata=metadata)
-            self.writeprofile(metadata)
+            self.writeprofile(metadata,i)
             if self.logdir is not None:
                 summary=self.sess.run(self.summary,feed_dict=feed_dict,options=options,run_metadata=metadata)
                 self.writer.add_summary(summary,i+1)
@@ -231,7 +231,7 @@ def BonePositionWithLog(featureNum,boneNum,vertexNum,logdir):
 
 #bp=BonePosition(featureNum,boneNum,vertexNum)
 #bp=BonePositionWithLog(featureNum,boneNum,vertexNum,"../logs")
-bp=BonePosition(featureNum,boneNum,vertexNum,None,"../timeline.json")
+bp=BonePosition(featureNum,boneNum,vertexNum,None,"../timeline")
 
 feed_dict={bp.feature:feature,
            bp.bone:bone,
