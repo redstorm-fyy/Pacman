@@ -98,18 +98,21 @@ class BonePosition:
 
     def optimizers(self,logdir):
         optlist=[]
-        trainNum=50
-        optlist.append([tf.train.AdamOptimizer(0.001).minimize(self.loss),trainNum])
+        trainNum=20
         if logdir is not None:
-            optlist.append([tf.train.GradientDescentOptimizer(0.001).minimize(self.loss), trainNum])
-            optlist.append([tf.train.MomentumOptimizer(0.0002,0.9).minimize(self.loss),trainNum])
-            optlist.append([tf.train.AdagradOptimizer(0.002).minimize(self.loss),trainNum])
-            optlist.append([tf.train.ProximalGradientDescentOptimizer(0.002).minimize(self.loss), trainNum])
-            optlist.append([tf.train.ProximalAdagradOptimizer(0.002).minimize(self.loss), trainNum])
-            #optlist.append([tf.train.RMSPropOptimizer(0.0002,0.9).minimize(self.loss), trainNum]) #slow
-            #optlist.append([tf.train.AdagradDAOptimizer(0.001).minimize(self.loss), trainNum]) #need global_step
-            #optlist.append([tf.train.FtrlOptimizer(0.5).minimize(self.loss),trainNum]) #fast but big loss
-            #optlist.append([tf.train.AdadeltaOptimizer(0.5).minimize(self.loss),trainNum]) #slow
+            optlist.append([tf.train.GradientDescentOptimizer(0.003).minimize(self.loss), trainNum])
+            # optlist.append([tf.train.AdamOptimizer(0.001).minimize(self.loss), trainNum]) # precise but slower than GradientDescentOptimizer
+            # optlist.append([tf.train.AdagradOptimizer(0.002).minimize(self.loss),trainNum])# sometimes big loss
+            # optlist.append([tf.train.MomentumOptimizer(0.0002,0.9).minimize(self.loss),trainNum]) # sometimes big loss
+            # optlist.append([tf.train.ProximalGradientDescentOptimizer(0.003).minimize(self.loss), trainNum]) # nearly same as GradientDescentOptimizer
+            # optlist.append([tf.train.ProximalAdagradOptimizer(0.002).minimize(self.loss), trainNum]) # nearly same as AdagradOptimizer
+            # optlist.append([tf.train.RMSPropOptimizer(0.0002,0.9).minimize(self.loss), trainNum]) #slow
+            # optlist.append([tf.train.AdadeltaOptimizer(0.5).minimize(self.loss),trainNum]) #slow
+            # optlist.append([tf.train.AdagradDAOptimizer(0.001).minimize(self.loss), trainNum]) #need global_step
+            # optlist.append([tf.train.FtrlOptimizer(0.5).minimize(self.loss),trainNum]) #fast but big loss
+        else:
+            optlist.append([tf.train.GradientDescentOptimizer(0.003).minimize(self.loss), trainNum])
+
         return optlist
 
     def sublogdir(self,logdir,idx):
@@ -124,7 +127,10 @@ class BonePosition:
             options=tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
             metadata=tf.RunMetadata()
             trainNum=2
-        self.sess.run([tf.global_variables_initializer(),self.boneInit],feed_dict={self.bone:feed_dict[self.bone]},options=options,run_metadata=metadata)
+        self.sess.run([tf.global_variables_initializer(),self.boneInit],feed_dict=feed_dict,options=options,run_metadata=metadata)
+        if self.logdir is not None:
+            summary = self.sess.run(self.summary, feed_dict=feed_dict, options=options, run_metadata=metadata)
+            writer.add_summary(summary, 0)
         for i in range(0,trainNum):
             self.sess.run(optimizer,feed_dict=feed_dict,options=options,run_metadata=metadata)
             self.writeprofile(metadata,i)
@@ -227,30 +233,12 @@ vertexNum=len(vertex)
 indexNum=len(index)
 weightNum=len(weight)
 
-print(featureNum,boneNum,poseNum,vertexNum,indexNum,weightNum)
-
-def DeleteLogDir(logdir):
-    import stat
-    for f in os.listdir(logdir):
-        subdir=os.path.join(logdir,f)
-        for f in os.listdir(subdir):
-            path=os.path.join(subdir,f)
-            if not os.access(path,os.W_OK):
-                try:
-                    os.chmod(path,stat.S_IWUSR)
-                    os.remove(path)
-                except Exception as e:
-                    print(e)
-            else:
-                os.remove(path)
-        try:
-            os.rmdir(subdir)
-        except Exception as e:
-            print(e)
+tm0=datetime.now()
+print("start",tm0,featureNum,boneNum,poseNum,vertexNum,indexNum,weightNum)
 
 #bp=BonePosition(featureNum,boneNum,vertexNum)
-bp=BonePosition(featureNum,boneNum,vertexNum,"../logs")
-#bp=BonePosition(featureNum,boneNum,vertexNum,None,"../timeline")
+#bp=BonePosition(featureNum,boneNum,vertexNum,"../logs")
+bp=BonePosition(featureNum,boneNum,vertexNum,None,"../timeline")
 
 feed_dict={bp.feature:feature,
            bp.bone:bone,
@@ -259,7 +247,10 @@ feed_dict={bp.feature:feature,
            bp.weight:weight,
            bp.index:index}
 
-print("begin training")
+tm1=datetime.now()
+print("begin training",tm1,tm1-tm0)
 bone=bp.train(feed_dict)
+tm2=datetime.now()
+print("end training",tm2,tm2-tm1)
 WriteNewBone(bone)
 
