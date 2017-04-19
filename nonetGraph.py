@@ -27,7 +27,6 @@ import tensorflow as tf
 import numpy as np
 from tensorflow.python.client import timeline
 from datetime import datetime
-import os
 
 class BonePosition:
     def __del__(self):
@@ -38,14 +37,14 @@ class BonePosition:
         bone = tf.gather(self.boneVar, self.index,name="gather_bone") # [boneNum,matx,maty],[vertexNum,vbnum]->[vertexNum,vbnum,matx,maty]
         cat=tf.constant(1.0,dtype=tf.float32,shape=[self.vertexNum,1])
         vertex=tf.concat([self.vertex,cat],axis=1,name="concat_vertex") #[vertexNum,matx+1],makesure maty=matx+1
-        cat=tf.reshape(cat,[self.vertexNum,1,1])
-        cat=tf.tile(cat,[1,self.vbnum,1],name="tile_cat") #[vertexNum,vbnum,1]
 
         vertex=tf.reshape(vertex,[self.vertexNum,self.maty,1])
         pose=tf.reshape(pose,[self.vertexNum,self.vbnum*self.matx,self.maty])
         location=tf.matmul(pose,vertex,name="matmul_pose") #[vertexNum,vbnum*matx,1]
         location=tf.reshape(location,[self.vertexNum,self.vbnum,self.matx])
 
+        cat=tf.reshape(cat,[self.vertexNum,1,1])
+        cat=tf.tile(cat,[1,self.vbnum,1],name="tile_cat") #[vertexNum,vbnum,1]
         location=tf.concat([location,cat],axis=2,name="concat_location") #[vertexNum,vbnum,matx+1]
         location=tf.reshape(location,[self.vertexNum,self.vbnum,self.maty,1])
         location=tf.matmul(bone,location,name="matmul_bone") #[vertexNum,vbnum,matx,1]
@@ -220,6 +219,9 @@ def WriteNewBone(bone):
             b.tofile(f,sep="\t")
             f.write(b"\r\n")
 
+tm1=datetime.now()
+print("load",tm1)
+
 bone=ReadBone()
 pose=ReadPose()
 vertex=ReadVertex()
@@ -233,12 +235,12 @@ vertexNum=len(vertex)
 indexNum=len(index)
 weightNum=len(weight)
 
-tm0=datetime.now()
-print("start",tm0,featureNum,boneNum,poseNum,vertexNum,indexNum,weightNum)
+tm2=datetime.now()
+print("start",tm2,tm2-tm1,[featureNum,boneNum,poseNum,vertexNum,indexNum,weightNum])
 
-#bp=BonePosition(featureNum,boneNum,vertexNum)
+bp=BonePosition(featureNum,boneNum,vertexNum)
 #bp=BonePosition(featureNum,boneNum,vertexNum,"../logs")
-bp=BonePosition(featureNum,boneNum,vertexNum,None,"../timeline")
+#bp=BonePosition(featureNum,boneNum,vertexNum,None,"../timeline")
 
 feed_dict={bp.feature:feature,
            bp.bone:bone,
@@ -247,10 +249,11 @@ feed_dict={bp.feature:feature,
            bp.weight:weight,
            bp.index:index}
 
-tm1=datetime.now()
-print("begin training",tm1,tm1-tm0)
+tm1=tm2;tm2=datetime.now()
+print("train",tm2,tm2-tm1)
+
 bone=bp.train(feed_dict)
-tm2=datetime.now()
-print("end training",tm2,tm2-tm1)
+tm1=tm2;tm2=datetime.now()
+print("end",tm2,tm2-tm1)
 WriteNewBone(bone)
 
