@@ -67,8 +67,6 @@ class BonePosition:
         return loss
 
     def __init__(self,featureNum,boneNum,vertexNum,logdir=None,profile=None):
-        self.speed=0.0003
-        self.trainNum=70
         self.matx=3
         self.maty=self.matx+1
         self.vbnum=4 #one vertex connects vbnum bones
@@ -86,15 +84,64 @@ class BonePosition:
 
         self.loc=self.calclocation()#[vertexNum,matx]
         self.loss=self.calcloss(self.loc)
-        self.opt=tf.train.RMSPropOptimizer(self.speed).minimize(self.loss)
         tf.summary.scalar("loss", self.loss)
+        self.optlist=self.optimizers(logdir)
 
         self.sess=tf.Session()
         self.logdir=logdir
         if self.logdir is not None:
-            self.writer=tf.summary.FileWriter(self.logdir,self.sess.graph,flush_secs=10)
+            for i,v in enumerate(self.optlist):
+                subdir=self.sublogdir(self.logdir,i)
+                v.append(tf.summary.FileWriter(subdir,self.sess.graph,flush_secs=10))
             self.summary=tf.summary.merge_all()
         self.profile=profile
+
+    def optimizers(self,logdir):
+        optlist=[]
+        trainNum=50
+        optlist.append([tf.train.AdamOptimizer(0.001).minimize(self.loss),trainNum])
+        if logdir is not None:
+            optlist.append([tf.train.GradientDescentOptimizer(0.001).minimize(self.loss), trainNum])
+            optlist.append([tf.train.MomentumOptimizer(0.0002,0.9).minimize(self.loss),trainNum])
+            optlist.append([tf.train.AdagradOptimizer(0.002).minimize(self.loss),trainNum])
+            optlist.append([tf.train.ProximalGradientDescentOptimizer(0.002).minimize(self.loss), trainNum])
+            optlist.append([tf.train.ProximalAdagradOptimizer(0.002).minimize(self.loss), trainNum])
+            #optlist.append([tf.train.RMSPropOptimizer(0.0002,0.9).minimize(self.loss), trainNum]) #slow
+            #optlist.append([tf.train.AdagradDAOptimizer(0.001).minimize(self.loss), trainNum]) #need global_step
+            #optlist.append([tf.train.FtrlOptimizer(0.5).minimize(self.loss),trainNum]) #fast but big loss
+            #optlist.append([tf.train.AdadeltaOptimizer(0.5).minimize(self.loss),trainNum]) #slow
+        return optlist
+
+    def sublogdir(self,logdir,idx):
+        now = datetime.now()
+        subdir = logdir + "/ev_" + now.strftime("%Y%m%d-%H%M%S")+"_"+str(idx)
+        return subdir
+
+    def trainopt(self,feed_dict,optimizer,trainNum,writer):
+        options=None
+        metadata=None
+        if self.profile is not None:
+            options=tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+            metadata=tf.RunMetadata()
+            trainNum=2
+        self.sess.run([tf.global_variables_initializer(),self.boneInit],feed_dict={self.bone:feed_dict[self.bone]},options=options,run_metadata=metadata)
+        for i in range(0,trainNum):
+            self.sess.run(optimizer,feed_dict=feed_dict,options=options,run_metadata=metadata)
+            self.writeprofile(metadata,i)
+            if self.logdir is not None:
+                summary=self.sess.run(self.summary,feed_dict=feed_dict,options=options,run_metadata=metadata)
+                writer.add_summary(summary,i+1)
+        bone=self.sess.run(self.boneVar,options=options,run_metadata=metadata)
+        return bone
+
+    def train(self,feed_dict):
+        bone=None
+        if self.logdir is not None:
+            for [opt,num,writer] in self.optlist:
+                bone=self.trainopt(feed_dict,opt,num,writer)
+        else:
+            bone=self.trainopt(feed_dict,self.optlist[0][0],self.optlist[0][1],None)
+        return bone
 
     def writeprofile(self,metadata,idx):
         if self.profile is None:
@@ -104,23 +151,6 @@ class BonePosition:
         ctf = tl.generate_chrome_trace_format()
         with open(self.profile+str(idx)+".json","w") as f:
             f.write(ctf)
-
-    def train(self,feed_dict):
-        options=None
-        metadata=None
-        if self.profile is not None:
-            options=tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-            metadata=tf.RunMetadata()
-            self.trainNum=2
-        self.sess.run([tf.global_variables_initializer(),self.boneInit],feed_dict={self.bone:feed_dict[self.bone]},options=options,run_metadata=metadata)
-        for i in range(0,self.trainNum):
-            self.sess.run(self.opt,feed_dict=feed_dict,options=options,run_metadata=metadata)
-            self.writeprofile(metadata,i)
-            if self.logdir is not None:
-                summary=self.sess.run(self.summary,feed_dict=feed_dict,options=options,run_metadata=metadata)
-                self.writer.add_summary(summary,i+1)
-        bone=self.sess.run(self.boneVar,options=options,run_metadata=metadata)
-        return bone
 
 def ReadMatrixlist(f):
     mlist=[]
@@ -218,20 +248,9 @@ def DeleteLogDir(logdir):
         except Exception as e:
             print(e)
 
-def PrepareCurrentLogDir(logdir):
-    now=datetime.now()
-    subdir=logdir+"/ev_"+now.strftime("%Y%m%d-%H%M%S")
-    return subdir
-
-def BonePositionWithLog(featureNum,boneNum,vertexNum,logdir):
-    #DeleteLogDir(logdir)
-    subdir = PrepareCurrentLogDir(logdir)
-    bp = BonePosition(featureNum, boneNum, vertexNum, subdir)
-    return bp
-
 #bp=BonePosition(featureNum,boneNum,vertexNum)
-#bp=BonePositionWithLog(featureNum,boneNum,vertexNum,"../logs")
-bp=BonePosition(featureNum,boneNum,vertexNum,None,"../timeline")
+bp=BonePosition(featureNum,boneNum,vertexNum,"../logs")
+#bp=BonePosition(featureNum,boneNum,vertexNum,None,"../timeline")
 
 feed_dict={bp.feature:feature,
            bp.bone:bone,
