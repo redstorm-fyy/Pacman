@@ -21,6 +21,19 @@ Vector3 CalculateLocation(Mesh mesh,int vertexIndex)
     result += Mul(bones[bw.boneIndex3].localToWorldMatrix, Mul(mesh.bindposes[bw.boneIndex3], point)) * bw.weight3;
     return result;
 }
+
+optimizer test
+optlist.append([tf.train.GradientDescentOptimizer(0.003).minimize(self.loss), trainNum])
+optlist.append([tf.train.AdamOptimizer(0.001).minimize(self.loss), trainNum]) # precise but slower than GradientDescentOptimizer
+optlist.append([tf.train.AdagradOptimizer(0.002).minimize(self.loss),trainNum])# sometimes big loss
+optlist.append([tf.train.MomentumOptimizer(0.0002,0.9).minimize(self.loss),trainNum]) # sometimes big loss
+optlist.append([tf.train.ProximalGradientDescentOptimizer(0.003).minimize(self.loss), trainNum]) # nearly same as GradientDescentOptimizer
+optlist.append([tf.train.ProximalAdagradOptimizer(0.002).minimize(self.loss), trainNum]) # nearly same as AdagradOptimizer
+optlist.append([tf.train.RMSPropOptimizer(0.0002,0.9).minimize(self.loss), trainNum]) #slow
+optlist.append([tf.train.AdadeltaOptimizer(0.5).minimize(self.loss),trainNum]) #slow
+optlist.append([tf.train.AdagradDAOptimizer(0.001).minimize(self.loss), trainNum]) #need global_step
+optlist.append([tf.train.FtrlOptimizer(0.5).minimize(self.loss),trainNum]) #fast but big loss
+
 '''
 
 import tensorflow as tf
@@ -52,7 +65,7 @@ class BonePosition:
 
         weight=tf.reshape(self.weight,[self.vertexNum,self.vbnum,1])
         location=tf.multiply(location,weight,name="multiply_weight") #[vertexNum,vbnum,matx]
-        location=tf.reduce_sum(location,axis=[1],name="sum_weight")#[vertexNum,matx]
+        location=tf.reduce_sum(location,axis=1,name="sum_weight")#[vertexNum,matx]
         return location
 
     def calcloss(self,location): #[vertexNum,matx],[featureNum,matx]->[]
@@ -64,6 +77,16 @@ class BonePosition:
         loss=a-2*ab+b #[vertexNum,featureNum],Distance(A,B)=(A-B)(A-B)=AA-2AB+BB
         loss=tf.reduce_sum(tf.reduce_min(loss,axis=0,name="min_distance"),name="sum_loss")
         return loss
+
+    def body(self,i,optimizer,logdir):
+        loss=self.calcloss(self.calclocation())
+        opt=optimizer.minimize(loss)
+        if logdir is not None:
+            summary_loss=tf.summary.scalar("loss", loss)
+            queue=self.queue.enqueue(summary_loss)
+            return tf.tuple([i + 1], control_inputs=[opt,queue])
+        else:
+            return tf.tuple([i + 1], control_inputs=[opt])
 
     def __init__(self,featureNum,boneNum,vertexNum,logdir=None,profile=None):
         self.matx=3
@@ -80,81 +103,51 @@ class BonePosition:
         self.vertex=tf.placeholder(tf.float32,shape=[self.vertexNum,self.matx])
         self.weight=tf.placeholder(tf.float32,shape=[self.vertexNum,self.vbnum])
         self.index=tf.placeholder(tf.int32,shape=[self.vertexNum,self.vbnum])
+        # for check
+        self.loss=self.calcloss(self.calclocation())
 
-        self.loc=self.calclocation()#[vertexNum,matx]
-        self.loss=self.calcloss(self.loc)
-        tf.summary.scalar("loss", self.loss)
-        self.optlist=self.optimizers(logdir)
+        self.trainNum=20
+        optimizer=tf.train.RMSPropOptimizer(0.0002,0.9)
+        if logdir is not None:
+            self.queue=tf.FIFOQueue(self.trainNum,dtypes=tf.string)
+            self.summary=self.queue.dequeue()
+        self.y=tf.while_loop(lambda i:i<self.trainNum,lambda i:self.body(i,optimizer,logdir),[tf.constant(0,dtype=tf.int32)])
 
         self.sess=tf.Session()
         self.logdir=logdir
         if self.logdir is not None:
-            for i,v in enumerate(self.optlist):
-                subdir=self.sublogdir(self.logdir,i)
-                v.append(tf.summary.FileWriter(subdir,self.sess.graph,flush_secs=10))
-            self.summary=tf.summary.merge_all()
+            subdir = self.sublogdir(self.logdir)
+            self.writer=tf.summary.FileWriter(subdir, self.sess.graph)
         self.profile=profile
 
-    def optimizers(self,logdir):
-        optlist=[]
-        trainNum=20
-        if logdir is not None:
-            optlist.append([tf.train.GradientDescentOptimizer(0.003).minimize(self.loss), trainNum])
-            # optlist.append([tf.train.AdamOptimizer(0.001).minimize(self.loss), trainNum]) # precise but slower than GradientDescentOptimizer
-            # optlist.append([tf.train.AdagradOptimizer(0.002).minimize(self.loss),trainNum])# sometimes big loss
-            # optlist.append([tf.train.MomentumOptimizer(0.0002,0.9).minimize(self.loss),trainNum]) # sometimes big loss
-            # optlist.append([tf.train.ProximalGradientDescentOptimizer(0.003).minimize(self.loss), trainNum]) # nearly same as GradientDescentOptimizer
-            # optlist.append([tf.train.ProximalAdagradOptimizer(0.002).minimize(self.loss), trainNum]) # nearly same as AdagradOptimizer
-            # optlist.append([tf.train.RMSPropOptimizer(0.0002,0.9).minimize(self.loss), trainNum]) #slow
-            # optlist.append([tf.train.AdadeltaOptimizer(0.5).minimize(self.loss),trainNum]) #slow
-            # optlist.append([tf.train.AdagradDAOptimizer(0.001).minimize(self.loss), trainNum]) #need global_step
-            # optlist.append([tf.train.FtrlOptimizer(0.5).minimize(self.loss),trainNum]) #fast but big loss
-        else:
-            optlist.append([tf.train.GradientDescentOptimizer(0.003).minimize(self.loss), trainNum])
-
-        return optlist
-
-    def sublogdir(self,logdir,idx):
-        now = datetime.now()
-        subdir = logdir + "/ev_" + now.strftime("%Y%m%d-%H%M%S")+"_"+str(idx)
-        return subdir
-
-    def trainopt(self,feed_dict,optimizer,trainNum,writer):
+    def train(self,feed_dict):
         options=None
         metadata=None
         if self.profile is not None:
             options=tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
             metadata=tf.RunMetadata()
-            trainNum=2
-        self.sess.run([tf.global_variables_initializer(),self.boneInit],feed_dict=feed_dict,options=options,run_metadata=metadata)
+        self.sess.run([tf.global_variables_initializer(),self.boneInit],feed_dict={self.bone:feed_dict[self.bone]},options=options,run_metadata=metadata)
+        self.sess.run(self.y,feed_dict=feed_dict,options=options,run_metadata=metadata)
+        self.writeprofile(metadata)
         if self.logdir is not None:
-            summary = self.sess.run(self.summary, feed_dict=feed_dict, options=options, run_metadata=metadata)
-            writer.add_summary(summary, 0)
-        for i in range(0,trainNum):
-            self.sess.run(optimizer,feed_dict=feed_dict,options=options,run_metadata=metadata)
-            self.writeprofile(metadata,i)
-            if self.logdir is not None:
-                summary=self.sess.run(self.summary,feed_dict=feed_dict,options=options,run_metadata=metadata)
-                writer.add_summary(summary,i+1)
+            for i in range(0,self.trainNum):
+                summary=self.sess.run(self.summary,options=options,run_metadata=metadata)
+                self.writer.add_summary(summary,i)
         bone=self.sess.run(self.boneVar,options=options,run_metadata=metadata)
         return bone
 
-    def train(self,feed_dict):
-        bone=None
-        if self.logdir is not None:
-            for [opt,num,writer] in self.optlist:
-                bone=self.trainopt(feed_dict,opt,num,writer)
-        else:
-            bone=self.trainopt(feed_dict,self.optlist[0][0],self.optlist[0][1],None)
-        return bone
+    def sublogdir(self,logdir):
+        now = datetime.now()
+        subdir = logdir + "/ev_" + now.strftime("%Y%m%d-%H%M%S")
+        return subdir
 
-    def writeprofile(self,metadata,idx):
+    def writeprofile(self,metadata):
         if self.profile is None:
             return
         tl=timeline.Timeline(metadata.step_stats)
         #ctf=tl.generate_chrome_trace_format(show_dataflow=True,show_memory=True)
         ctf = tl.generate_chrome_trace_format()
-        with open(self.profile+str(idx)+".json","w") as f:
+        with open(self.profile+".json","w") as f:
             f.write(ctf)
 
 def ReadMatrixlist(f):
@@ -238,8 +231,8 @@ weightNum=len(weight)
 tm2=datetime.now()
 print("start",tm2,tm2-tm1,[featureNum,boneNum,poseNum,vertexNum,indexNum,weightNum])
 
-bp=BonePosition(featureNum,boneNum,vertexNum)
-#bp=BonePosition(featureNum,boneNum,vertexNum,"../logs")
+#bp=BonePosition(featureNum,boneNum,vertexNum)
+bp=BonePosition(featureNum,boneNum,vertexNum,"../logs")
 #bp=BonePosition(featureNum,boneNum,vertexNum,None,"../timeline")
 
 feed_dict={bp.feature:feature,
@@ -257,3 +250,4 @@ tm1=tm2;tm2=datetime.now()
 print("end",tm2,tm2-tm1)
 WriteNewBone(bone)
 
+print(bp.sess.run(bp.loss,feed_dict=feed_dict))
