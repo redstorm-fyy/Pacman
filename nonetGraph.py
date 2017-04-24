@@ -78,13 +78,13 @@ class BonePosition:
         loss=tf.reduce_sum(tf.reduce_min(loss,axis=0,name="min_distance"),name="sum_loss")
         return loss
 
-    def body(self,i,optimizer,logdir):
+    def body(self,i,queue,optimizer,logdir):
         loss=self.calcloss(self.calclocation())
         opt=optimizer.minimize(loss)
         if logdir is not None:
             summary_loss=tf.summary.scalar("loss", loss)
-            queue=self.queue.enqueue(summary_loss)
-            return tf.tuple([i + 1], control_inputs=[opt,queue])
+            enqueue=queue.enqueue(summary_loss)
+            return tf.tuple([i + 1], control_inputs=[opt,enqueue])
         else:
             return tf.tuple([i + 1], control_inputs=[opt])
 
@@ -103,15 +103,13 @@ class BonePosition:
         self.vertex=tf.placeholder(tf.float32,shape=[self.vertexNum,self.matx])
         self.weight=tf.placeholder(tf.float32,shape=[self.vertexNum,self.vbnum])
         self.index=tf.placeholder(tf.int32,shape=[self.vertexNum,self.vbnum])
-        # for check
-        self.loss=self.calcloss(self.calclocation())
 
         self.trainNum=20
-        optimizer=tf.train.RMSPropOptimizer(0.0002,0.9)
+        optimizer=tf.train.GradientDescentOptimizer(0.003)
         if logdir is not None:
-            self.queue=tf.FIFOQueue(self.trainNum,dtypes=tf.string)
-            self.summary=self.queue.dequeue()
-        self.y=tf.while_loop(lambda i:i<self.trainNum,lambda i:self.body(i,optimizer,logdir),[tf.constant(0,dtype=tf.int32)])
+            queue=tf.FIFOQueue(self.trainNum,dtypes=tf.string)
+            self.summary=queue.dequeue()
+        self.y=tf.while_loop(lambda i:i<self.trainNum,lambda i:self.body(i,queue,optimizer,logdir),[tf.constant(0,dtype=tf.int32)],parallel_iterations=10)
 
         self.sess=tf.Session()
         self.logdir=logdir
@@ -213,7 +211,7 @@ def WriteNewBone(bone):
             f.write(b"\r\n")
 
 tm1=datetime.now()
-print("load",tm1)
+print("version",tf.__version__,tm1)
 
 bone=ReadBone()
 pose=ReadPose()
@@ -250,4 +248,4 @@ tm1=tm2;tm2=datetime.now()
 print("end",tm2,tm2-tm1)
 WriteNewBone(bone)
 
-print(bp.sess.run(bp.loss,feed_dict=feed_dict))
+#print(bp.sess.run(bp.loss,feed_dict=feed_dict))
