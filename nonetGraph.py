@@ -78,15 +78,10 @@ class BonePosition:
         loss=tf.reduce_sum(tf.reduce_min(loss,axis=0,name="min_distance"),name="sum_loss")
         return loss
 
-    def body(self,i,queue,optimizer,logdir):
+    def body(self,i,optimizer):
         loss=self.calcloss(self.calclocation())
         opt=optimizer.minimize(loss)
-        if logdir is not None:
-            summary_loss=tf.summary.scalar("loss", loss)
-            enqueue=queue.enqueue(summary_loss)
-            return tf.tuple([i + 1], control_inputs=[opt,enqueue])
-        else:
-            return tf.tuple([i + 1], control_inputs=[opt])
+        return tf.tuple([i + 1], control_inputs=[opt])
 
     def __init__(self,featureNum,boneNum,vertexNum,logdir=None,profile=None):
         self.matx=3
@@ -106,16 +101,19 @@ class BonePosition:
 
         self.trainNum=20
         optimizer=tf.train.GradientDescentOptimizer(0.003)
+        #optimizer=tf.train.RMSPropOptimizer(0.0002,0.9)
         if logdir is not None:
-            queue=tf.FIFOQueue(self.trainNum,dtypes=tf.string)
-            self.summary=queue.dequeue()
-        self.y=tf.while_loop(lambda i:i<self.trainNum,lambda i:self.body(i,queue,optimizer,logdir),[tf.constant(0,dtype=tf.int32)],parallel_iterations=10)
+            loss = self.calcloss(self.calclocation())
+            self.summary=tf.summary.scalar("loss",loss)
+            self.y = optimizer.minimize(loss)
+        else:
+            self.y=tf.while_loop(lambda i:i<self.trainNum,lambda i:self.body(i,optimizer),[tf.constant(0)],parallel_iterations=10)
 
         self.sess=tf.Session()
         self.logdir=logdir
         if self.logdir is not None:
             subdir = self.sublogdir(self.logdir)
-            self.writer=tf.summary.FileWriter(subdir, self.sess.graph)
+            self.writer=tf.summary.FileWriter(subdir, self.sess.graph,flush_secs=1)
         self.profile=profile
 
     def train(self,feed_dict):
@@ -125,12 +123,17 @@ class BonePosition:
             options=tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
             metadata=tf.RunMetadata()
         self.sess.run([tf.global_variables_initializer(),self.boneInit],feed_dict={self.bone:feed_dict[self.bone]},options=options,run_metadata=metadata)
-        self.sess.run(self.y,feed_dict=feed_dict,options=options,run_metadata=metadata)
-        self.writeprofile(metadata)
         if self.logdir is not None:
+            summary = self.sess.run(self.summary, feed_dict=feed_dict,options=options, run_metadata=metadata)
+            self.writer.add_summary(summary, 0)
             for i in range(0,self.trainNum):
-                summary=self.sess.run(self.summary,options=options,run_metadata=metadata)
-                self.writer.add_summary(summary,i)
+                self.sess.run(self.y,feed_dict=feed_dict,options=options,run_metadata=metadata)
+                self.writeprofile(metadata)
+                summary=self.sess.run(self.summary,feed_dict=feed_dict,options=options,run_metadata=metadata)
+                self.writer.add_summary(summary,i+1)
+        else:
+            self.sess.run(self.y,feed_dict=feed_dict,options=options,run_metadata=metadata)
+            self.writeprofile(metadata)
         bone=self.sess.run(self.boneVar,options=options,run_metadata=metadata)
         return bone
 
